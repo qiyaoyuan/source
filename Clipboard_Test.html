@@ -1,0 +1,52 @@
+<html>
+
+<head>
+<title>Clipboard Test</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+</head>
+
+<body>
+
+<p>[Test 1] From Input</p>
+<input id="demoInput" value="Clipboard_Input">
+<button id="btnInput">Click</button>
+
+<script>
+let btn_input = document.querySelector('#btnInput');
+btn_input.addEventListener('click', () => {
+	let input = document.querySelector('#demoInput');
+	input.select();
+	if (document.execCommand('copy')) {
+		document.execCommand('copy');
+		console.log('Input_Succeed');
+	}
+})
+</script>
+
+<br>
+<br>
+
+<p>[Test 2] From Div</p>
+<div id="val">Clipboard_Div
+<button id="btnDiv">Click</button>
+</div>
+<script>
+let btn_div = document.querySelector('#btnDiv');
+let val = document.querySelector('#val').innerHTML;
+btn_div.addEventListener('click',() => {
+	let input = document.createElement('input');
+  input.setAttribute('readonly', 'readonly');
+  input.setAttribute('value', val);
+  document.body.appendChild(input);
+	input.setSelectionRange(0, val.length);
+	if (document.execCommand('copy')) {
+		document.execCommand('copy');
+		console.log('Div_Succeed');
+	}
+    document.body.removeChild(input);
+})
+</script>
+
+</body>
+
+</html>
