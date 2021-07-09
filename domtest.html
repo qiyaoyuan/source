@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+<section>
+    <div id="add"></div>
+    <div id="remove"></div>
+</section>
+<script>
+    const domCount = 100000;
+    const $add = document.getElementById('add')
+
+    // add
+    const addStart = Date.now()
+    const $fragment = document.createDocumentFragment()
+    for (let i = 0, $dom = null; i < domCount; ++i) {
+        $dom = document.createElement('div');
+        $dom.appendChild(document.createTextNode("Hello world"))
+        $dom.id = i
+        $fragment.append($dom)
+    }
+    // for (let i = 0, $dom = null, $wrapper; i < domCount; ++i) {
+    //     $dom = document.createElement('div');
+    //     $wrapper = document.createElement('div');
+    //     $dom.id = i
+    //     $dom.appendChild($wrapper);
+    //     $wrapper.appendChild(document.createTextNode("Hello world"))
+    //     $fragment.append($dom)
+    // }
+    document.body.appendChild($fragment)
+    const addEnd = Date.now()
+    $add.textContent = 'add duration: ' + (addEnd - addStart) + 'ms'
+
+    // remove
+    setTimeout(() => {
+        const $remove = document.getElementById('remove')
+        const removeStart = Date.now()
+        for (let i = 0, $dom = null; i < domCount; i++) {
+            $dom = document.getElementById('' + i)
+            $dom && document.body.removeChild($dom)
+        }
+        const removeEnd = Date.now()
+        $remove.textContent = 'remove duration: ' + (removeEnd - removeStart) + 'ms'
+    }, 1000)
+
+    // change
+
+    // find
+
+</script>
+</body>
+</html>
