@@ -1,0 +1,16 @@
+<html>
+<head>
+<title>页面被释放</title>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+</head>
+<script type="text/javascript">
+function createArray() {
+    var a = new Array(128 * 1024 * 1024)
+    alert("createArray");
+}
+</script>
+<body>
+<input type="button" onclick="createArray()" value="点击创建Array">
+</body>
+</html>
