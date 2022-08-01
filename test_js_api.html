@@ -15,6 +15,7 @@
    function loadDebugPage() {
    		if(window.tbs_bridge){
 			var ret = tbs_bridge.test("aaa");
+			tbs_bridge.nativeExec("ug", "loadDebugPage", "-1" , "{}");
 		}
 	}
 
