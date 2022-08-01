@@ -1,0 +1,30 @@
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>TBSUG 调试页面</title>
+</head>
+<body onLoad="initStatus()">
+
+<!--所有代码逻辑都是在这段js里面做的-->
+<script type="text/javascript">
+   function initStatus(){
+    loadDebugPage()
+   }
+
+   function loadDebugPage() {
+   		if(window.tbs_bridge){
+			tbs_bridge.test("aaa");
+		}
+	}
+
+</script>
+
+<div class="container">
+    <div class="main">
+如果长时间未加载，说明x5内核版本过低，仅支持5.3以上内核
+    </div>
+</div>
+
+</body>
+</html>
