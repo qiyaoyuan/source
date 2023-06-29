@@ -6,9 +6,9 @@
 </head>
 <script type="text/javascript">
 function createArray() {
-    var a = new Array(128 * 1024 * 1024)
-    for(var i = 0; i < a.length; i++) {
-        a[i] = "abcdefgh";
+    var a;
+    for(var i = 0; i < 10; i++) {
+        a = new Array(128 * 1024 * 1024).fill(1);
     }
     alert("createArray");
 }
