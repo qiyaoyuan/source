@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网页卡死测试</title>
+</head>
+<body>
+    <h1>网页卡死测试</h1>
+    <p>这个页面将在几秒钟内卡死。</p>
+    <script>
+        // 无限循环造成浏览器卡死
+        while (true) {
+            // 加入一个无用的计算，让浏览器繁忙
+            Math.sqrt(Math.random());
+        }
+    </script>
+</body>
+</html>
