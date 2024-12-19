@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LocalStorage 示例</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        input, button {
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>LocalStorage 示例</h1>
+    <input type="text" id="key" placeholder="输入键" />
+    <input type="text" id="value" placeholder="输入值" />
+    <button id="saveButton">保存到 LocalStorage</button>
+    <button id="loadButton">加载 LocalStorage</button>
+    <button id="clearButton">清空 LocalStorage</button>
+
+    <h2>存储的数据:</h2>
+    <pre id="output"></pre>
+
+    <script>
+        const saveButton = document.getElementById('saveButton');
+        const loadButton = document.getElementById('loadButton');
+        const clearButton = document.getElementById('clearButton');
+        const output = document.getElementById('output');
+
+        // 保存数据到 localStorage
+        saveButton.addEventListener('click', () => {
+            const key = document.getElementById('key').value;
+            const value = document.getElementById('value').value;
+
+            if (key && value) {
+                localStorage.setItem(key, value);
+                alert(`已保存: ${key} = ${value}`);
+                document.getElementById('key').value = '';
+                document.getElementById('value').value = '';
+            } else {
+                alert('请填写键和值');
+            }
+        });
+
+        // 加载数据并显示
+        loadButton.addEventListener('click', () => {
+            output.textContent = ''; // 清空输出区域
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                const value = localStorage.getItem(key);
+                output.textContent += `${key}: ${value}\n`;
+            }
+        });
+
+        // 清空 localStorage
+        clearButton.addEventListener('click', () => {
+            localStorage.clear();
+            output.textContent = '';
+            alert('已清空 LocalStorage');
+        });
+    </script>
+</body>
+</html>
