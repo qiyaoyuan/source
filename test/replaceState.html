@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>replaceState 示例</title>
+</head>
+<body>
+  <h1>replaceState 示例</h1>
+  <button onclick="updateState()">更新状态</button>
+
+  <script>
+    function updateState() {
+      // 创建一个新的状态对象
+      var newState = { message: "新的状态信息" };
+
+      // 使用 replaceState 方法更新浏览器历史记录中的状态
+      window.history.replaceState(newState, "", "/new-url");
+
+      // 输出更新后的状态信息
+      console.log("更新后的状态信息:", newState);
+    }
+  </script>
+</body>
+</html>
