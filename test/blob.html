@@ -1,35 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Blob 协议下载文件测试</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blob Link Example</title>
 </head>
 <body>
-  <button id="downloadBtn">下载文件</button>
+    <h1>Blob Link Example</h1>
+    <p>Click the link below to open a blob URL:</p>
+    <a href="#" id="blobLink">Open Blob Content</a>
 
-  <script>
-    document.getElementById('downloadBtn').addEventListener('click', () => {
-      // 1. 创建 Blob 对象
-      const content = '这是一个测试文件的内容。';
-      const blob = new Blob([content], { type: 'text/plain' });
-
-      // 2. 生成 Blob URL
-      const blobUrl = URL.createObjectURL(blob);
-
-      // 3. 创建下载链接
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = 'test-file.txt'; // 设置下载文件名
-      document.body.appendChild(a);
-
-      // 4. 触发下载
-      a.click();
-
-      // 5. 清理 Blob URL
-      URL.revokeObjectURL(blobUrl);
-      document.body.removeChild(a);
-    });
-  </script>
+    <script>
+        // Create a blob with some content
+        const blobContent = new Blob(['Hello, this is blob content!'], { type: 'text/plain' });
+        
+        // Create a blob URL
+        const blobUrl = URL.createObjectURL(blobContent);
+        
+        // Set the link's href to the blob URL
+        document.getElementById('blobLink').href = blobUrl;
+    </script>
 </body>
 </html>
