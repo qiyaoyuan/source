@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blob Link Example</title>
+</head>
+<body>
+    <h1>Blob Link Example</h1>
+    <p>Click the link below to open a blob URL:</p>
+    <a href="#" id="blobLink">Open Blob Content</a>
+
+    <script>
+        // Create a blob with some content
+        const blobContent = new Blob(['Hello, this is blob content!'], { type: 'text/plain' });
+        
+        // Create a blob URL
+        const blobUrl = URL.createObjectURL(blobContent);
+        
+        // Set the link's href to the blob URL
+        document.getElementById('blobLink').href = blobUrl;
+    </script>
+</body>
+</html> 
