@@ -3,22 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Blob Link Example</title>
+    <title>Download Zip File</title>
 </head>
 <body>
-    <h1>Blob Link Example</h1>
-    <p>Click the link below to open a blob URL:</p>
-    <a href="#" id="blobLink">Open Blob Content</a>
+    <h1>Download Zip File</h1>
+    <p>Click the link below to download the zip file:</p>
+    <a href="#" id="downloadLink">Download Zip File</a>
 
     <script>
-        // Create a blob with some content
-        const blobContent = new Blob(['Hello, this is blob content!'], { type: 'text/plain' });
-        
-        // Create a blob URL
-        const blobUrl = URL.createObjectURL(blobContent);
-        
-        // Set the link's href to the blob URL
-        document.getElementById('blobLink').href = blobUrl;
+        async function createDownloadLink() {
+            try {
+                // Fetch the zip file
+                const response = await fetch('http://dz.80zw.la/3148/大道争锋.zip');
+                const blob = await response.blob();
+                
+                // Create a blob URL
+                const blobUrl = URL.createObjectURL(blob);
+                
+                // Set the link's href to the blob URL
+                const link = document.getElementById('downloadLink');
+                link.href = blobUrl;
+                link.download = '大道争锋.zip'; // Set the default filename
+                
+                console.log('Download link created successfully');
+            } catch (error) {
+                console.error('Error creating download link:', error);
+                alert('Failed to create download link. Please try again.');
+            }
+        }
+
+        // Create the download link when the page loads
+        createDownloadLink();
     </script>
 </body>
 </html> 
