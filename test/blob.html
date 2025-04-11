@@ -1,47 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Download File</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blob 协议下载文件测试</title>
 </head>
 <body>
-    <h1>Download File</h1>
-    <p>Click the link below to download the file:</p>
-    <a href="#" id="downloadLink" onclick="downloadFile(event)">Download File</a>
+  <button id="downloadBtn">下载文件</button>
 
-    <script>
-        async function downloadFile(event) {
-            event.preventDefault();
-            
-            try {
-                // 要下载的文件URL
-                const fileUrl = 'http://dz.80zw.la/3148/大道争锋.zip';
-                
-                // 获取文件
-                const response = await fetch(fileUrl);
-                const blob = await response.blob();
-                
-                // 创建blob URL
-                const blobUrl = URL.createObjectURL(blob);
-                
-                // 创建临时链接并触发下载
-                const link = document.createElement('a');
-                link.href = blobUrl;
-                link.download = '大道争锋.zip';
-                document.body.appendChild(link);
-                link.click();
-                
-                // 清理
-                document.body.removeChild(link);
-                URL.revokeObjectURL(blobUrl);
-                
-                console.log('File downloaded successfully');
-            } catch (error) {
-                console.error('Error downloading file:', error);
-                alert('Failed to download file. Please try again.');
-            }
-        }
-    </script>
+  <script>
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+      // 1. 创建 Blob 对象
+      const content = '这是一个测试文件的内容。';
+      const blob = new Blob([content], { type: 'text/plain' });
+
+      // 2. 生成 Blob URL
+      const blobUrl = URL.createObjectURL(blob);
+
+      // 3. 创建下载链接
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = 'test-file.txt'; // 设置下载文件名
+      document.body.appendChild(a);
+
+      // 4. 触发下载
+      a.click();
+
+      // 5. 清理 Blob URL
+      URL.revokeObjectURL(blobUrl);
+      document.body.removeChild(a);
+    });
+  </script>
 </body>
-</html> 
+</html>
