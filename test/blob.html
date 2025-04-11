@@ -3,37 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Download Zip File</title>
+    <title>Download File</title>
 </head>
 <body>
-    <h1>Download Zip File</h1>
-    <p>Click the link below to download the zip file:</p>
-    <a href="#" id="downloadLink">Download Zip File</a>
+    <h1>Download File</h1>
+    <p>Click the link below to download the file:</p>
+    <a href="#" id="downloadLink" onclick="downloadFile(event)">Download File</a>
 
     <script>
-        async function createDownloadLink() {
+        async function downloadFile(event) {
+            event.preventDefault();
+            
             try {
-                // Fetch the zip file
-                const response = await fetch('http://dz.80zw.la/3148/大道争锋.zip');
+                // 要下载的文件URL
+                const fileUrl = 'http://dz.80zw.la/3148/大道争锋.zip';
+                
+                // 获取文件
+                const response = await fetch(fileUrl);
                 const blob = await response.blob();
                 
-                // Create a blob URL
+                // 创建blob URL
                 const blobUrl = URL.createObjectURL(blob);
                 
-                // Set the link's href to the blob URL
-                const link = document.getElementById('downloadLink');
+                // 创建临时链接并触发下载
+                const link = document.createElement('a');
                 link.href = blobUrl;
-                link.download = '大道争锋.zip'; // Set the default filename
+                link.download = '大道争锋.zip';
+                document.body.appendChild(link);
+                link.click();
                 
-                console.log('Download link created successfully');
+                // 清理
+                document.body.removeChild(link);
+                URL.revokeObjectURL(blobUrl);
+                
+                console.log('File downloaded successfully');
             } catch (error) {
-                console.error('Error creating download link:', error);
-                alert('Failed to create download link. Please try again.');
+                console.error('Error downloading file:', error);
+                alert('Failed to download file. Please try again.');
             }
         }
-
-        // Create the download link when the page loads
-        createDownloadLink();
     </script>
 </body>
 </html> 
