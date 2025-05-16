@@ -7,9 +7,11 @@
 <body>
   <h1>beforeunload 对话框示例</h1>
   <p>尝试关闭、刷新或跳转此页面时，会弹出浏览器自带的提示。</p>
+  <textarea placeholder="随便输入点什么"></textarea>
   <script>
     window.addEventListener('beforeunload', function (e) {
-      e.returnValue = '';
+       e.preventDefault();
+      e.returnValue = '确定要离开此页面吗？你所做的更改可能不会被保存。';
     });
   </script>
 </body>
