@@ -6,14 +6,10 @@
 </head>
 <body>
   <h1>beforeunload 对话框示例</h1>
-  <p>尝试关闭、刷新或跳转此页面时，会弹出提示。</p>
+  <p>尝试关闭、刷新或跳转此页面时，会弹出浏览器自带的提示。</p>
   <script>
     window.addEventListener('beforeunload', function (e) {
-      // 标准做法：设置 returnValue
-      e.preventDefault();
-      e.returnValue = '确定要离开此页面吗？'; // 某些浏览器会显示自定义文本，但大多数只显示默认提示
-      // 兼容老浏览器
-      return '确定要离开此页面吗？';
+      e.returnValue = '';
     });
   </script>
 </body>
