@@ -1,16 +1,24 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <title>测试触发插件事件</title>
+  <title>Extension Page</title>
 </head>
 <body>
-  <button id="open-extension-page">打开插件页面</button>
-
+  <h1>Hello from your extension page!</h1>
+  <input type="file" id="videoInput" accept="video/*">
+  <br><br>
+  <video id="videoPlayer" width="640" height="360" controls></video>
   <script>
-    document.getElementById('open-extension-page').addEventListener('click', function() {
-      window.postMessage({ type: 'OPEN_EXTENSION_PAGE' }, '*');
+    const input = document.getElementById('videoInput');
+    const video = document.getElementById('videoPlayer');
+    input.addEventListener('change', function() {
+      const file = this.files[0];
+      if (file) {
+        const url = URL.createObjectURL(file);
+        video.src = url;
+        video.play();
+      }
     });
   </script>
 </body>
-</html>
+</html> 
