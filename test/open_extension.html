@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>测试触发插件事件</title>
+</head>
+<body>
+  <button id="open-extension-page">打开插件页面</button>
+
+  <script>
+    document.getElementById('open-extension-page').addEventListener('click', function() {
+      window.postMessage({ type: 'OPEN_EXTENSION_PAGE' }, '*');
+    });
+  </script>
+</body>
+</html>
