@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V8 内存监控器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .memory-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .memory-card {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            border-left: 5px solid #4facfe;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .memory-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.15);
+        }
+
+        .memory-card h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+            display: flex;
+            align-items: center;
+        }
+
+        .memory-card h3::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: #4facfe;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+
+        .memory-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #4facfe;
+            margin-bottom: 5px;
+        }
+
+        .memory-unit {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .progress-container {
+            margin-top: 15px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4facfe, #00f2fe);
+            border-radius: 10px;
+            transition: width 0.5s ease;
+            position: relative;
+        }
+
+        .progress-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-weight: bold;
+            font-size: 0.9em;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+        }
+
+        .warning {
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        .chart-container {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            margin-top: 20px;
+        }
+
+        .chart-container h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+
+        .chart {
+            width: 100%;
+            height: 300px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .chart-line {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to top, rgba(79, 172, 254, 0.1), transparent);
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #4facfe, #00f2fe);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(79, 172, 254, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f8f9fa;
+            color: #333;
+            border: 2px solid #e9ecef;
+        }
+
+        .btn-secondary:hover {
+            background: #e9ecef;
+        }
+
+        .status {
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+
+        .status.running {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.stopped {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        @media (max-width: 768px) {
+            .memory-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            .content {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 V8 内存监控器</h1>
+            <p>实时监控浏览器 V8 引擎内存使用情况</p>
+        </div>
+
+        <div class="content">
+            <div class="warning" id="warning">
+                ⚠️ 内存使用率过高！建议关闭不必要的标签页或刷新页面。
+            </div>
+
+            <div class="controls">
+                <button class="btn btn-primary" id="startBtn">开始监控</button>
+                <button class="btn btn-secondary" id="stopBtn">停止监控</button>
+                <button class="btn btn-secondary" id="refreshBtn">刷新数据</button>
+                <div class="status" id="status">状态: 已停止</div>
+            </div>
+
+            <div class="memory-grid">
+                <div class="memory-card">
+                    <h3>已用堆内存</h3>
+                    <div class="memory-value" id="usedMemory">0</div>
+                    <div class="memory-unit">MB</div>
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="usedProgress" style="width: 0%">
+                                <div class="progress-text" id="usedProgressText">0%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="memory-card">
+                    <h3>堆内存限制</h3>
+                    <div class="memory-value" id="limitMemory">0</div>
+                    <div class="memory-unit">MB</div>
+                </div>
+
+                <div class="memory-card">
+                    <h3>总堆内存</h3>
+                    <div class="memory-value" id="totalMemory">0</div>
+                    <div class="memory-unit">MB</div>
+                </div>
+
+                <div class="memory-card">
+                    <h3>设备内存</h3>
+                    <div class="memory-value" id="deviceMemory">0</div>
+                    <div class="memory-unit">GB</div>
+                </div>
+
+                <div class="memory-card">
+                    <h3>CPU 核心数</h3>
+                    <div class="memory-value" id="cpuCores">0</div>
+                    <div class="memory-unit">核心</div>
+                </div>
+
+                <div class="memory-card">
+                    <h3>内存使用率</h3>
+                    <div class="memory-value" id="usagePercent">0</div>
+                    <div class="memory-unit">%</div>
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="usageProgress" style="width: 0%">
+                                <div class="progress-text" id="usageProgressText">0%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <h3>内存使用趋势</h3>
+                <div class="chart" id="chart">
+                    <div class="chart-line" id="chartLine"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class MemoryMonitor {
+            constructor() {
+                this.isRunning = false;
+                this.interval = null;
+                this.memoryHistory = [];
+                this.maxHistoryLength = 50;
+                
+                this.initializeElements();
+                this.bindEvents();
+                this.updateMemoryInfo();
+            }
+
+            initializeElements() {
+                this.startBtn = document.getElementById('startBtn');
+                this.stopBtn = document.getElementById('stopBtn');
+                this.refreshBtn = document.getElementById('refreshBtn');
+                this.status = document.getElementById('status');
+                this.warning = document.getElementById('warning');
+                
+                // 内存显示元素
+                this.usedMemory = document.getElementById('usedMemory');
+                this.limitMemory = document.getElementById('limitMemory');
+                this.totalMemory = document.getElementById('totalMemory');
+                this.deviceMemory = document.getElementById('deviceMemory');
+                this.cpuCores = document.getElementById('cpuCores');
+                this.usagePercent = document.getElementById('usagePercent');
+                
+                // 进度条元素
+                this.usedProgress = document.getElementById('usedProgress');
+                this.usedProgressText = document.getElementById('usedProgressText');
+                this.usageProgress = document.getElementById('usageProgress');
+                this.usageProgressText = document.getElementById('usageProgressText');
+                
+                // 图表元素
+                this.chart = document.getElementById('chart');
+                this.chartLine = document.getElementById('chartLine');
+            }
+
+            bindEvents() {
+                this.startBtn.addEventListener('click', () => this.startMonitoring());
+                this.stopBtn.addEventListener('click', () => this.stopMonitoring());
+                this.refreshBtn.addEventListener('click', () => this.updateMemoryInfo());
+            }
+
+            getMemoryInfo() {
+                const info = {
+                    available: false,
+                    used: 0,
+                    total: 0,
+                    limit: 0,
+                    deviceMemory: 0,
+                    cpuCores: 0,
+                    usagePercent: 0
+                };
+
+                // V8 内存信息 (Chrome/Edge)
+                if (performance.memory) {
+                    info.available = true;
+                    info.used = Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+                    info.total = Math.round(performance.memory.totalJSHeapSize / 1024 / 1024);
+                    info.limit = Math.round(performance.memory.jsHeapSizeLimit / 1024 / 1024);
+                    info.usagePercent = info.limit > 0 ? Math.round((info.used / info.limit) * 100) : 0;
+                }
+
+                // 设备内存
+                if (navigator.deviceMemory) {
+                    info.deviceMemory = navigator.deviceMemory;
+                }
+
+                // CPU 核心数
+                if (navigator.hardwareConcurrency) {
+                    info.cpuCores = navigator.hardwareConcurrency;
+                }
+
+                return info;
+            }
+
+            updateMemoryInfo() {
+                const memoryInfo = this.getMemoryInfo();
+                
+                // 更新显示
+                this.usedMemory.textContent = memoryInfo.used;
+                this.limitMemory.textContent = memoryInfo.limit;
+                this.totalMemory.textContent = memoryInfo.total;
+                this.deviceMemory.textContent = memoryInfo.deviceMemory;
+                this.cpuCores.textContent = memoryInfo.cpuCores;
+                this.usagePercent.textContent = memoryInfo.usagePercent;
+
+                // 更新进度条
+                const usedPercent = memoryInfo.limit > 0 ? (memoryInfo.used / memoryInfo.limit) * 100 : 0;
+                this.usedProgress.style.width = `${usedPercent}%`;
+                this.usedProgressText.textContent = `${Math.round(usedPercent)}%`;
+                
+                this.usageProgress.style.width = `${memoryInfo.usagePercent}%`;
+                this.usageProgressText.textContent = `${memoryInfo.usagePercent}%`;
+
+                // 更新进度条颜色
+                this.updateProgressColor(memoryInfo.usagePercent);
+
+                // 检查内存使用率警告
+                this.checkMemoryWarning(memoryInfo.usagePercent);
+
+                // 添加到历史记录
+                if (this.isRunning) {
+                    this.addToHistory(memoryInfo.used);
+                    this.updateChart();
+                }
+
+                return memoryInfo;
+            }
+
+            updateProgressColor(usagePercent) {
+                let color;
+                if (usagePercent < 50) {
+                    color = 'linear-gradient(90deg, #4facfe, #00f2fe)';
+                } else if (usagePercent < 80) {
+                    color = 'linear-gradient(90deg, #ffa726, #ff7043)';
+                } else {
+                    color = 'linear-gradient(90deg, #ff6b6b, #ee5a24)';
+                }
+                
+                this.usedProgress.style.background = color;
+                this.usageProgress.style.background = color;
+            }
+
+            checkMemoryWarning(usagePercent) {
+                if (usagePercent > 80) {
+                    this.warning.style.display = 'block';
+                } else {
+                    this.warning.style.display = 'none';
+                }
+            }
+
+            addToHistory(usedMemory) {
+                this.memoryHistory.push({
+                    value: usedMemory,
+                    timestamp: Date.now()
+                });
+
+                // 保持历史记录长度
+                if (this.memoryHistory.length > this.maxHistoryLength) {
+                    this.memoryHistory.shift();
+                }
+            }
+
+            updateChart() {
+                if (this.memoryHistory.length < 2) return;
+
+                const canvas = document.createElement('canvas');
+                canvas.width = this.chart.offsetWidth;
+                canvas.height = this.chart.offsetHeight;
+                const ctx = canvas.getContext('2d');
+
+                // 清除之前的图表
+                this.chart.innerHTML = '';
+                this.chart.appendChild(canvas);
+
+                // 绘制图表
+                this.drawChart(ctx);
+            }
+
+            drawChart(ctx) {
+                const width = ctx.canvas.width;
+                const height = ctx.canvas.height;
+                const padding = 20;
+
+                // 清除画布
+                ctx.clearRect(0, 0, width, height);
+
+                // 获取数据范围
+                const values = this.memoryHistory.map(item => item.value);
+                const maxValue = Math.max(...values);
+                const minValue = Math.min(...values);
+
+                // 绘制网格
+                ctx.strokeStyle = '#e0e0e0';
+                ctx.lineWidth = 1;
+                for (let i = 0; i <= 5; i++) {
+                    const y = padding + (height - 2 * padding) * (i / 5);
+                    ctx.beginPath();
+                    ctx.moveTo(padding, y);
+                    ctx.lineTo(width - padding, y);
+                    ctx.stroke();
+                }
+
+                // 绘制折线图
+                ctx.strokeStyle = '#4facfe';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+
+                this.memoryHistory.forEach((item, index) => {
+                    const x = padding + (width - 2 * padding) * (index / (this.memoryHistory.length - 1));
+                    const y = height - padding - (height - 2 * padding) * ((item.value - minValue) / (maxValue - minValue || 1));
+                    
+                    if (index === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                });
+
+                ctx.stroke();
+
+                // 绘制数据点
+                ctx.fillStyle = '#4facfe';
+                this.memoryHistory.forEach((item, index) => {
+                    const x = padding + (width - 2 * padding) * (index / (this.memoryHistory.length - 1));
+                    const y = height - padding - (height - 2 * padding) * ((item.value - minValue) / (maxValue - minValue || 1));
+                    
+                    ctx.beginPath();
+                    ctx.arc(x, y, 3, 0, 2 * Math.PI);
+                    ctx.fill();
+                });
+            }
+
+            startMonitoring() {
+                if (this.isRunning) return;
+
+                this.isRunning = true;
+                this.status.textContent = '状态: 运行中';
+                this.status.className = 'status running';
+                
+                // 立即更新一次
+                this.updateMemoryInfo();
+                
+                // 开始定时监控
+                this.interval = setInterval(() => {
+                    this.updateMemoryInfo();
+                }, 2000); // 每2秒更新一次
+            }
+
+            stopMonitoring() {
+                if (!this.isRunning) return;
+
+                this.isRunning = false;
+                this.status.textContent = '状态: 已停止';
+                this.status.className = 'status stopped';
+                
+                if (this.interval) {
+                    clearInterval(this.interval);
+                    this.interval = null;
+                }
+            }
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            const monitor = new MemoryMonitor();
+            
+            // 自动开始监控
+            setTimeout(() => {
+                monitor.startMonitoring();
+            }, 1000);
+        });
+    </script>
+</body>
+</html> 
