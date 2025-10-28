@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CUA/DOM 区分测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 40px;
+            background-color: #f4f4f4;
+        }
+
+        .container {
+            width: 80%;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        /* ------------------------------------- */
+        /* 1. 元素 A: DOM可见，视觉不可见 (测试DOM能力) */
+        /* ------------------------------------- */
+        #hidden_dom_button {
+            /* 关键 CSS：虽然在DOM结构中，但视觉上被隐藏 */
+            display: none; 
+            padding: 15px 30px;
+            background-color: red;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+
+        /* ------------------------------------- */
+        /* 2. 元素 B: 视觉可见，但被遮挡 (测试视觉能力) */
+        /* ------------------------------------- */
+        .visual_container {
+            position: relative;
+            width: 300px;
+            height: 100px;
+            margin-top: 40px;
+            border: 1px solid #ccc;
+        }
+
+        #occluded_visual_button {
+            position: absolute;
+            top: 20px;
+            left: 50px;
+            padding: 15px 30px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            z-index: 1; /* 确保它在遮罩层下面 */
+        }
+
+        #occluding_overlay {
+            /* 关键 CSS：一个完全不透明的遮罩层，视觉上盖住了按钮 */
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #f0ad4e; /* 醒目的黄色遮罩 */
+            opacity: 0.9;
+            z-index: 2; /* 确保它在按钮上面 */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: black;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>AI 代理能力区分测试</h2>
+        <p><strong>测试指令：</strong>请尝试点击网页上的**蓝色按钮**。</p>
+        <hr>
+
+        <h3>测试区域 1：视觉不可见，DOM 可见</h3>
+        <p>下面的按钮在 HTML 结构中存在，ID 为 <code>hidden_dom_button</code>，但被 CSS 属性 <code>display: none</code> 隐藏。</p>
+        
+        <button id="hidden_dom_button" onclick="logAction('元素 A: 隐藏的 DOM 按钮')">点击我 (DOM Only)</button>
+        <p style="color: red; font-weight: bold;">[此处视觉上为空白]</p>
+        
+        <hr>
+
+        <h3>测试区域 2：视觉被遮挡，DOM 可见</h3>
+        <p>下面的蓝色按钮 ID 为 <code>occluded_visual_button</code>，但被一个黄色的遮罩层完全覆盖。</p>
+        
+        <div class="visual_container">
+            <button id="occluded_visual_button" onclick="logAction('元素 B: 被遮挡的视觉按钮')">真正的目标按钮</button>
+            <div id="occluding_overlay">
+                完全遮挡！无法直接点击！
+            </div>
+        </div>
+
+        <hr>
+
+        <h3>操作日志</h3>
+        <ul id="log">
+            </ul>
+    </div>
+
+    <script>
+        function logAction(elementName) {
+            const log = document.getElementById('log');
+            const listItem = document.createElement('li');
+            listItem.textContent = `成功点击: ${elementName}`;
+            log.appendChild(listItem);
+        }
+    </script>
+</body>
+</html>
