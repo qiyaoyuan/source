@@ -3,60 +3,573 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Alert 按钮演示页面</title>
+  <title>前端模态对话框完整测试用例</title>
   <style>
+    * { box-sizing: border-box; }
     body {
-      font-family: 'Microsoft YaHei', Arial, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
+      font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
       margin: 0;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 20px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      min-height: 100vh;
+      color: #eee;
     }
-    .container {
+    .page-header {
       text-align: center;
-      padding: 40px;
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-    }
-    h1 {
-      color: #333;
       margin-bottom: 30px;
     }
-    .alert-btn {
-      padding: 12px 32px;
-      font-size: 16px;
-      font-weight: bold;
-      color: white;
-      background-color: #007bff;
+    .page-header h1 { color: #e94560; margin-bottom: 8px; }
+    .page-header p { color: #a0a0a0; font-size: 14px; }
+
+    .section {
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .section h2 {
+      color: #e94560;
+      font-size: 18px;
+      margin: 0 0 15px 0;
+      padding-bottom: 8px;
+      border-bottom: 2px solid rgba(233,69,96,0.5);
+    }
+    .btn-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 10px;
+    }
+    .btn {
+      padding: 10px 16px;
+      font-size: 14px;
       border: none;
-      border-radius: 8px;
+      border-radius: 6px;
       cursor: pointer;
-      transition: all 0.2s ease;
-      box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+      transition: all 0.2s;
+      font-weight: 500;
     }
-    .alert-btn:hover {
-      background-color: #0056b3;
-      transform: translateY(-2px);
-      box-shadow: 0 6px 16px rgba(0, 123, 255, 0.4);
+    .btn:hover { transform: translateY(-1px); opacity: 0.9; }
+    .btn-native { background: #e94560; color: white; }
+    .btn-dialog { background: #0f3460; color: #00fff5; }
+    .btn-custom { background: #533483; color: white; }
+    .btn-other { background: #2d4059; color: #ffc93c; }
+    .btn-danger { background: #c0392b; color: white; }
+
+    /* Custom modal styles */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
     }
-    .alert-btn:active {
-      transform: translateY(0);
+    .modal-overlay.active { display: flex; }
+    .modal-box {
+      background: #1a1a2e;
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 90vw;
+      max-height: 90vh;
+      overflow: auto;
+      box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+      border: 1px solid rgba(233,69,96,0.3);
+      animation: modalIn 0.3s ease;
     }
+    @keyframes modalIn {
+      from { opacity: 0; transform: scale(0.9) translateY(-20px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .modal-box.sm { max-width: 300px; }
+    .modal-box.lg { max-width: 600px; }
+    .modal-box.xl { max-width: 800px; }
+    .modal-box.full { max-width: 95vw; max-height: 95vh; }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .modal-title { font-size: 18px; color: #e94560; margin: 0; }
+    .modal-close {
+      background: none;
+      border: none;
+      color: #888;
+      font-size: 24px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0 4px;
+    }
+    .modal-close:hover { color: #e94560; }
+    .modal-body { margin-bottom: 20px; color: #ccc; }
+    .modal-footer {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .modal-body input, .modal-body textarea, .modal-body select {
+      width: 100%;
+      padding: 10px;
+      margin: 8px 0;
+      border-radius: 6px;
+      border: 1px solid #333;
+      background: #0f3460;
+      color: #fff;
+    }
+    .log-output {
+      background: #0d0d0d;
+      border-radius: 8px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 150px;
+      overflow-y: auto;
+      margin-top: 20px;
+      color: #0f0;
+    }
+    .log-entry { margin: 4px 0; }
+    .log-entry.confirm-ok { color: #2ecc71; }
+    .log-entry.confirm-cancel { color: #e74c3c; }
+    .log-entry.prompt { color: #3498db; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Alert 对话框演示</h1>
-    <button class="alert-btn" id="alertBtn">点击弹出 Alert</button>
+  <div class="page-header">
+    <h1>前端模态对话框完整测试用例</h1>
+    <p>覆盖 Native 弹窗、HTML5 dialog、自定义 Modal 及各类边界场景</p>
+  </div>
+
+  <!-- 1. 原生 JavaScript 弹窗 -->
+  <div class="section">
+    <h2>1. 原生 JavaScript 弹窗 (window.alert / confirm / prompt)</h2>
+    <div class="btn-grid">
+      <button class="btn btn-native" data-test="alert-simple">alert - 简单文本</button>
+      <button class="btn btn-native" data-test="alert-long">alert - 长文本</button>
+      <button class="btn btn-native" data-test="alert-special">alert - 特殊字符</button>
+      <button class="btn btn-native" data-test="alert-emoji">alert - Emoji</button>
+      <button class="btn btn-native" data-test="alert-multiline">alert - 多行换行</button>
+      <button class="btn btn-native" data-test="alert-html">alert - 含 HTML 标签字符串</button>
+      <button class="btn btn-native" data-test="alert-empty">alert - 空字符串</button>
+      <button class="btn btn-native" data-test="alert-unicode">alert - Unicode/中文</button>
+      <button class="btn btn-native" data-test="confirm-ok">confirm - 点确定</button>
+      <button class="btn btn-native" data-test="confirm-cancel">confirm - 点取消</button>
+      <button class="btn btn-native" data-test="prompt-basic">prompt - 基本</button>
+      <button class="btn btn-native" data-test="prompt-default">prompt - 带默认值</button>
+      <button class="btn btn-native" data-test="prompt-empty">prompt - 空默认值</button>
+    </div>
+  </div>
+
+  <!-- 2. HTML5 dialog 元素 -->
+  <div class="section">
+    <h2>2. HTML5 &lt;dialog&gt; 元素</h2>
+    <div class="btn-grid">
+      <button class="btn btn-dialog" data-test="dialog-show">dialog.show() 非模态</button>
+      <button class="btn btn-dialog" data-test="dialog-showModal">dialog.showModal() 模态</button>
+      <button class="btn btn-dialog" data-test="dialog-form">dialog + form + method=dialog</button>
+      <button class="btn btn-dialog" data-test="dialog-returnValue">dialog returnValue</button>
+      <button class="btn btn-dialog" data-test="dialog-close">dialog.close()</button>
+      <button class="btn btn-dialog" data-test="dialog-esc">dialog ESC 关闭</button>
+      <button class="btn btn-dialog" data-test="dialog-backdrop">dialog 点击 backdrop</button>
+      <button class="btn btn-dialog" data-test="dialog-nested">dialog 嵌套 dialog</button>
+    </div>
+  </div>
+
+  <!-- 3. 自定义 Modal 实现 -->
+  <div class="section">
+    <h2>3. 自定义 Modal (Overlay + Div)</h2>
+    <div class="btn-grid">
+      <button class="btn btn-custom" data-test="custom-basic">基础 Modal</button>
+      <button class="btn btn-custom" data-test="custom-sm">小尺寸 Modal</button>
+      <button class="btn btn-custom" data-test="custom-lg">大尺寸 Modal</button>
+      <button class="btn btn-custom" data-test="custom-xl">超大 Modal</button>
+      <button class="btn btn-custom" data-test="custom-full">全屏 Modal</button>
+      <button class="btn btn-custom" data-test="custom-form">带表单 Modal</button>
+      <button class="btn btn-custom" data-test="custom-scroll">可滚动长内容</button>
+      <button class="btn btn-custom" data-test="custom-click-outside">点击外部关闭</button>
+      <button class="btn btn-custom" data-test="custom-no-outside">点击外部不关闭</button>
+      <button class="btn btn-custom" data-test="custom-nested">嵌套 Modal</button>
+    </div>
+  </div>
+
+  <!-- 4. 边界与特殊场景 -->
+  <div class="section">
+    <h2>4. 边界与特殊场景</h2>
+    <div class="btn-grid">
+      <button class="btn btn-other" data-test="sequential">连续弹窗 (alert→confirm→prompt)</button>
+      <button class="btn btn-other" data-test="before-unload">beforeunload 确认离开</button>
+      <button class="btn btn-other" data-test="print-dialog">print() 打印对话框</button>
+      <button class="btn btn-other" data-test="modal-focus">Modal 焦点陷阱 (Tab)</button>
+      <button class="btn btn-other" data-test="modal-aria">Modal ARIA 无障碍</button>
+      <button class="btn btn-other" data-test="modal-rtl">RTL 从右到左布局</button>
+      <button class="btn btn-other" data-test="modal-dark">深色主题 Modal</button>
+      <button class="btn btn-other" data-test="modal-animation">带动画 Modal</button>
+      <button class="btn btn-other" data-test="file-picker">文件选择器 (需安全上下文)</button>
+    </div>
+  </div>
+
+  <!-- 5. 日志输出 -->
+  <div class="section">
+    <h2>5. 测试日志</h2>
+    <button class="btn btn-danger" id="clearLog">清除日志</button>
+    <div class="log-output" id="logOutput">等待测试...</div>
+  </div>
+
+  <!-- HTML5 dialog 元素 -->
+  <dialog id="dialogBasic" class="modal-box">
+    <div class="modal-header">
+      <h3 class="modal-title">HTML5 dialog - 非模态</h3>
+      <button class="modal-close" onclick="document.getElementById('dialogBasic').close()">&times;</button>
+    </div>
+    <div class="modal-body">这是通过 dialog.show() 打开的非模态对话框，可点击页面其他区域。</div>
+    <div class="modal-footer">
+      <button class="btn btn-dialog" onclick="document.getElementById('dialogBasic').close()">关闭</button>
+    </div>
+  </dialog>
+
+  <dialog id="dialogModal" class="modal-box">
+    <div class="modal-header">
+      <h3 class="modal-title">HTML5 dialog - 模态</h3>
+      <button class="modal-close" onclick="document.getElementById('dialogModal').close()">&times;</button>
+    </div>
+    <div class="modal-body">这是通过 dialog.showModal() 打开的模态对话框，有 backdrop，需关闭才能操作背后内容。</div>
+    <div class="modal-footer">
+      <button class="btn btn-dialog" onclick="document.getElementById('dialogModal').close()">关闭</button>
+    </div>
+  </dialog>
+
+  <dialog id="dialogForm">
+    <form method="dialog" class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">dialog + form</h3>
+      </div>
+      <div class="modal-body">
+        <input type="text" name="username" placeholder="用户名">
+        <input type="password" name="pwd" placeholder="密码">
+      </div>
+      <div class="modal-footer">
+        <button type="submit" value="ok" class="btn btn-dialog">确定</button>
+        <button type="submit" value="cancel" class="btn btn-danger">取消</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dialogReturnValue" class="modal-box">
+    <div class="modal-header">
+      <h3 class="modal-title">returnValue 测试</h3>
+    </div>
+    <div class="modal-body">关闭时设置 returnValue，可在关闭后读取。</div>
+    <div class="modal-footer">
+      <button class="btn btn-dialog" onclick="closeWithValue('ok')">确定 (ok)</button>
+      <button class="btn btn-dialog" onclick="closeWithValue('cancel')">取消 (cancel)</button>
+    </div>
+  </dialog>
+
+  <dialog id="dialogNested">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">外层 dialog</h3>
+        <button class="modal-close" onclick="document.getElementById('dialogNested').close()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>这是外层 dialog，点击下方按钮打开内层 dialog。</p>
+        <button class="btn btn-dialog" onclick="document.getElementById('dialogNestedInner').showModal()">打开内层 dialog</button>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="dialogNestedInner" class="modal-box sm">
+    <div class="modal-header">
+      <h3 class="modal-title">内层 dialog</h3>
+      <button class="modal-close" onclick="document.getElementById('dialogNestedInner').close()">&times;</button>
+    </div>
+    <div class="modal-body">嵌套的 dialog</div>
+  </dialog>
+
+  <!-- 自定义 Modal 容器 -->
+  <div id="customModalOverlay" class="modal-overlay">
+    <div id="customModalBox" class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title" id="customModalTitle">自定义 Modal</h3>
+        <button class="modal-close" id="customModalClose">&times;</button>
+      </div>
+      <div class="modal-body" id="customModalBody"></div>
+      <div class="modal-footer" id="customModalFooter"></div>
+    </div>
   </div>
 
   <script>
-    document.getElementById('alertBtn').addEventListener('click', function() {
-      alert('你好！这是一个 Alert 对话框。');
+    const logEl = document.getElementById('logOutput');
+    function log(msg, cls = '') {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry' + (cls ? ' ' + cls : '');
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    document.getElementById('clearLog').onclick = () => {
+      logEl.innerHTML = '';
+      log('日志已清除');
+    };
+
+    // 1. 原生弹窗
+    const nativeTests = {
+      'alert-simple': () => { alert('简单文本'); log('alert: 简单文本'); },
+      'alert-long': () => {
+        const long = '这是一段很长的文本。'.repeat(50);
+        alert(long);
+        log('alert: 长文本已显示');
+      },
+      'alert-special': () => {
+        alert('特殊字符: <>&"\'\\n\\t 以及 \n 换行');
+        log('alert: 特殊字符');
+      },
+      'alert-emoji': () => {
+        alert('Emoji: 😀🎉✅❌🔥💯 中文+Emoji混合');
+        log('alert: Emoji');
+      },
+      'alert-multiline': () => {
+        alert('第一行\n第二行\n第三行');
+        log('alert: 多行');
+      },
+      'alert-html': () => {
+        alert('<script>alert(1)</script> 以及 <b>粗体</b> 等 HTML 字符串（应原样显示）');
+        log('alert: HTML 标签字符串');
+      },
+      'alert-empty': () => { alert(''); log('alert: 空字符串'); },
+      'alert-unicode': () => {
+        alert('Unicode: 日本語 한국어 العربية 中文 繁體');
+        log('alert: Unicode');
+      },
+      'confirm-ok': () => {
+        const r = confirm('请点击「确定」');
+        log(`confirm: 用户点击了 ${r ? '确定' : '取消'}`, r ? 'confirm-ok' : 'confirm-cancel');
+      },
+      'confirm-cancel': () => {
+        const r = confirm('请点击「取消」');
+        log(`confirm: 用户点击了 ${r ? '确定' : '取消'}`, r ? 'confirm-ok' : 'confirm-cancel');
+      },
+      'prompt-basic': () => {
+        const v = prompt('请输入内容');
+        log(`prompt: 用户输入 "${v === null ? '(取消)' : v}"`, 'prompt');
+      },
+      'prompt-default': () => {
+        const v = prompt('请输入', '默认值');
+        log(`prompt(带默认): 用户输入 "${v === null ? '(取消)' : v}"`, 'prompt');
+      },
+      'prompt-empty': () => {
+        const v = prompt('请输入', '');
+        log(`prompt(空默认): 用户输入 "${v === null ? '(取消)' : v}"`, 'prompt');
+      },
+    };
+
+    // 2. HTML5 dialog
+    const dialogTests = {
+      'dialog-show': () => {
+        document.getElementById('dialogBasic').show();
+        log('dialog.show() 非模态');
+      },
+      'dialog-showModal': () => {
+        document.getElementById('dialogModal').showModal();
+        log('dialog.showModal() 模态');
+      },
+      'dialog-form': () => {
+        const d = document.getElementById('dialogForm');
+        d.showModal();
+        d.addEventListener('close', function handler() {
+          log(`dialog form 关闭, returnValue: ${d.returnValue}`);
+          d.removeEventListener('close', handler);
+        }, { once: true });
+      },
+      'dialog-returnValue': () => {
+        const d = document.getElementById('dialogReturnValue');
+        d.showModal();
+        d.addEventListener('close', function handler() {
+          log(`dialog returnValue: ${d.returnValue}`);
+          d.removeEventListener('close', handler);
+        }, { once: true });
+      },
+      'dialog-close': () => {
+        const d = document.getElementById('dialogModal');
+        d.showModal();
+        setTimeout(() => { d.close(); log('dialog.close() 程序关闭'); }, 1500);
+      },
+      'dialog-esc': () => {
+        document.getElementById('dialogModal').showModal();
+        log('dialog: 按 ESC 键关闭');
+      },
+      'dialog-backdrop': () => {
+        const d = document.getElementById('dialogModal');
+        d.showModal();
+        const onBackdropClick = (e) => {
+          if (e.target === d) { d.close(); d.removeEventListener('click', onBackdropClick); }
+        };
+        d.addEventListener('click', onBackdropClick);
+        log('dialog: 点击灰色 backdrop 可关闭');
+      },
+      'dialog-nested': () => {
+        document.getElementById('dialogNested').showModal();
+        log('dialog: 嵌套 dialog');
+      },
+    };
+
+    function closeWithValue(v) {
+      const d = document.getElementById('dialogReturnValue');
+      d.returnValue = v;
+      d.close();
+    }
+
+    // 3. 自定义 Modal
+    function showCustomModal(opts) {
+      const overlay = document.getElementById('customModalOverlay');
+      const box = document.getElementById('customModalBox');
+      const title = document.getElementById('customModalTitle');
+      const body = document.getElementById('customModalBody');
+      const footer = document.getElementById('customModalFooter');
+      const closeBtn = document.getElementById('customModalClose');
+
+      box.className = 'modal-box ' + (opts.size || '');
+      title.textContent = opts.title || 'Modal';
+      body.innerHTML = opts.body || '';
+      footer.innerHTML = opts.footer || '<button class="btn btn-dialog" onclick="hideCustomModal()">关闭</button>';
+      overlay.classList.add('active');
+
+      if (opts.clickOutside) {
+        overlay.onclick = (e) => { if (e.target === overlay) hideCustomModal(); };
+      } else {
+        overlay.onclick = null;
+      }
+      closeBtn.onclick = () => hideCustomModal();
+    }
+    function hideCustomModal() {
+      document.getElementById('customModalOverlay').classList.remove('active');
+    }
+
+    const customTests = {
+      'custom-basic': () => {
+        showCustomModal({ title: '基础 Modal', body: '简单内容' });
+        log('custom: 基础 Modal');
+      },
+      'custom-sm': () => {
+        showCustomModal({ title: '小尺寸', body: '小 Modal', size: 'sm' });
+        log('custom: 小尺寸');
+      },
+      'custom-lg': () => {
+        showCustomModal({ title: '大尺寸', body: '大 Modal', size: 'lg' });
+        log('custom: 大尺寸');
+      },
+      'custom-xl': () => {
+        showCustomModal({ title: '超大', body: '超大 Modal', size: 'xl' });
+        log('custom: 超大');
+      },
+      'custom-full': () => {
+        showCustomModal({ title: '全屏', body: '全屏 Modal', size: 'full' });
+        log('custom: 全屏');
+      },
+      'custom-form': () => {
+        showCustomModal({
+          title: '带表单',
+          body: '<input type="text" placeholder="姓名"><input type="email" placeholder="邮箱">',
+          footer: '<button class="btn btn-dialog">提交</button><button class="btn btn-danger" onclick="hideCustomModal()">取消</button>'
+        });
+        log('custom: 带表单');
+      },
+      'custom-scroll': () => {
+        const long = '<p>可滚动内容</p>' + '<p>段落</p>'.repeat(30);
+        showCustomModal({ title: '可滚动', body: long });
+        log('custom: 可滚动');
+      },
+      'custom-click-outside': () => {
+        showCustomModal({ title: '点击外部关闭', body: '点击灰色背景可关闭', clickOutside: true });
+        log('custom: 点击外部关闭');
+      },
+      'custom-no-outside': () => {
+        showCustomModal({ title: '点击外部不关闭', body: '只能点关闭按钮', clickOutside: false });
+        log('custom: 点击外部不关闭');
+      },
+      'custom-nested': () => {
+        showCustomModal({
+          title: '外层 Modal',
+          body: '<p>外层内容</p><button class="btn btn-dialog" onclick="showCustomModal({title:\'内层 Modal\',body:\'嵌套的 Modal\'})">打开内层</button>',
+          clickOutside: true
+        });
+        log('custom: 嵌套 Modal');
+      },
+    };
+
+    // 4. 边界场景
+    const otherTests = {
+      'sequential': () => {
+        alert('第 1 个: alert');
+        const c = confirm('第 2 个: confirm');
+        log(`sequential: confirm=${c}`);
+        const p = prompt('第 3 个: prompt', '默认');
+        log(`sequential: prompt=${p}`);
+      },
+      'before-unload': () => {
+        window.onbeforeunload = () => '确定离开吗？';
+        log('beforeunload 已设置，尝试关闭或刷新页面');
+      },
+      'print-dialog': () => {
+        window.print();
+        log('print() 打印对话框');
+      },
+      'modal-focus': () => {
+        showCustomModal({
+          title: '焦点陷阱',
+          body: '<p>按 Tab 键，焦点应循环在 Modal 内</p><input type="text" placeholder="输入1"><input type="text" placeholder="输入2"><button class="btn">按钮</button>',
+          clickOutside: false
+        });
+        log('custom: 焦点陷阱');
+      },
+      'modal-aria': () => {
+        showCustomModal({
+          title: 'ARIA 无障碍',
+          body: '<p role="alert">此 Modal 应具有适当的 ARIA 属性供屏幕阅读器使用</p>'
+        });
+        log('custom: ARIA');
+      },
+      'modal-rtl': () => {
+        showCustomModal({
+          title: 'RTL 布局',
+          body: '<p dir="rtl">هذا نص من اليمين إلى اليسار</p><p>混合: 中文 + RTL</p>'
+        });
+        log('custom: RTL');
+      },
+      'modal-dark': () => {
+        showCustomModal({ title: '深色主题', body: '当前 Modal 已是深色主题' });
+        log('custom: 深色');
+      },
+      'modal-animation': () => {
+        showCustomModal({ title: '带动画', body: '打开时应有 scale + fade 动画' });
+        log('custom: 动画');
+      },
+      'file-picker': async () => {
+        if (!window.showOpenFilePicker) {
+          alert('showOpenFilePicker 不可用（需要 HTTPS 或 localhost）');
+          log('file-picker: 不可用');
+          return;
+        }
+        try {
+          const files = await window.showOpenFilePicker();
+          log(`file-picker: 选择了 ${files.length} 个文件`);
+        } catch (e) {
+          log(`file-picker: ${e.name} - ${e.message}`);
+        }
+      },
+    };
+
+    // 事件委托
+    document.querySelectorAll('[data-test]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.getAttribute('data-test');
+        if (nativeTests[key]) nativeTests[key]();
+        else if (dialogTests[key]) dialogTests[key]();
+        else if (customTests[key]) customTests[key]();
+        else if (otherTests[key]) otherTests[key]();
+      });
     });
   </script>
 </body>
