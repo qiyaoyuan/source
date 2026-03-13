@@ -335,7 +335,7 @@
         log('alert: 多行');
       },
       'alert-html': () => {
-        alert('<script>alert(1)</script> 以及 <b>粗体</b> 等 HTML 字符串（应原样显示）');
+        alert('<script>alert(1)</scr' + 'ipt> 以及 <b>粗体</b> 等 HTML 字符串（应原样显示）');
         log('alert: HTML 标签字符串');
       },
       'alert-empty': () => { alert(''); log('alert: 空字符串'); },
