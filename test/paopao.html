@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AI Bubble Clinic · 语音修复版</title>
+    <style>
+        /* 样式与之前相同，保持美观，这里省略重复样式以缩短长度，实际使用时请保留完整样式 */
+        /* 您可以直接沿用上一轮的完整 CSS，或使用下面精简版 */
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{background:linear-gradient(145deg,#1a5f7a,#0e3b4b);font-family:'Poppins',sans-serif;overflow:hidden;height:100vh;}
+        .game-container{height:100vh;display:flex;flex-direction:column;}
+        .title-bar{background:rgba(10,25,35,0.85);backdrop-filter:blur(16px);padding:16px;text-align:center;color:#ffefbf;}
+        .main-bubble-area{flex:2;display:flex;justify-content:center;align-items:center;position:relative;}
+        .current-bubble{width:260px;height:260px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#fff5d0,#ffb86c);display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 20px 30px rgba(0,0,0,0.3);}
+        .bubble-icon-large{font-size:4rem;}
+        .bubble-word{background:rgba(0,0,0,0.6);padding:6px 18px;border-radius:40px;color:#fff;margin-top:12px;}
+        .timer-ring{position:absolute;bottom:20px;right:20px;background:#000000aa;padding:8px 20px;border-radius:40px;font-size:1.8rem;font-weight:bold;color:#ffd966;}
+        .voice-panel{background:#00000077;backdrop-filter:blur(12px);margin:12px;padding:12px;border-radius:80px;display:flex;align-items:center;justify-content:space-between;}
+        .mic-btn{background:#ffcd94;border:none;border-radius:60px;padding:10px 24px;font-size:1.2rem;font-weight:bold;cursor:pointer;}
+        .led{width:20px;height:20px;border-radius:50%;background:gray;}
+        .led.green{background:#2ecc71;box-shadow:0 0 8px #2ecc71;}
+        .led.yellow{background:#f1c40f;box-shadow:0 0 8px #f1c40f;}
+        .word-collection-area{background:#0a1923cc;backdrop-filter:blur(16px);border-top:2px solid #ffd966;padding:12px;}
+        .words-bank{display:flex;flex-wrap:wrap;gap:12px;max-height:120px;overflow-y:auto;}
+        .word-card{background:linear-gradient(135deg,#f9e0a0,#ffc97a);border-radius:40px;padding:6px 18px;display:inline-flex;gap:8px;cursor:pointer;}
+        .control-bar{display:flex;justify-content:center;gap:16px;padding:12px;}
+        .start-btn{background:#27ae60;color:white;border:none;border-radius:40px;padding:8px 24px;font-size:1rem;cursor:pointer;}
+        .reset-btn{background:#e67e22;}
+        .feedback-text{color:#fff3cf;background:#00000066;padding:6px 12px;border-radius:40px;}
+        .pop-particle{position:absolute;width:10px;height:10px;background:#ffaa55;border-radius:50%;animation:fly 0.5s forwards;}
+        @keyframes fly{to{opacity:0;transform:translate(var(--dx),var(--dy)) scale(0);}}
+    </style>
+</head>
+<body>
+<div class="game-container">
+    <div class="title-bar">
+        <h1>🤖 AI Bubble Clinic · Speak & Correct</h1>
+        <div>🎤 语音纠错 | 45秒快闪 | 说对单词泡泡炸开</div>
+    </div>
+    <div class="main-bubble-area">
+        <div class="current-bubble" id="currentBubble">
+            <div class="bubble-icon-large" id="bubbleIcon">🦷💢</div>
+            <div class="bubble-word" id="bubbleWordLabel">toothache</div>
+        </div>
+        <div class="timer-ring" id="timerDisplay">45s</div>
+    </div>
+    <div class="voice-panel">
+        <button class="mic-btn" id="micButton">🎤 按住说话 · 读单词</button>
+        <div style="display:flex;align-items:center;gap:12px;">
+            <div class="led" id="ledIndicator"></div>
+            <div class="feedback-text" id="feedbackMsg">✨ 点击「开始游戏」</div>
+        </div>
+    </div>
+    <div class="word-collection-area">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+            <span>📖 单词收集墙 (正确解锁)</span>
+            <span id="scoreStats">正确:0 / 尝试:0</span>
+        </div>
+        <div class="words-bank" id="wordsBankContainer"></div>
+    </div>
+    <div class="control-bar">
+        <button class="start-btn" id="startGameBtn">🚀 开始游戏 (45秒)</button>
+        <button class="start-btn reset-btn" id="resetGameBtn">🔄 重置游戏</button>
+    </div>
+</div>
+
+<script>
+    // 单词库 (包含stomachache)
+    const WORDS_LIST = [
+        { word: "toothache", icon: "🦷💢", phonetic: "/ˈtuːθ.eɪk/" },
+        { word: "headache", icon: "🤕🧠", phonetic: "/ˈhedeɪk/" },
+        { word: "backache", icon: "🔙😩", phonetic: "/ˈbækeɪk/" },
+        { word: "stomachache", icon: "🤢🍽️", phonetic: "/ˈstʌməkeɪk/" },
+        { word: "fever", icon: "🌡️🤒", phonetic: "/ˈfiːvər/" },
+        { word: "cold", icon: "🤧❄️", phonetic: "/koʊld/" },
+        { word: "flu", icon: "🦠😷", phonetic: "/fluː/" },
+        { word: "sore throat", icon: "🗣️🔥", phonetic: "/sɔːr θroʊt/" },
+        { word: "cut", icon: "🩹✂️", phonetic: "/kʌt/" },
+        { word: "burn", icon: "🔥🖐️", phonetic: "/bɜːrn/" },
+        { word: "food allergy", icon: "🍤⚠️", phonetic: "/fuːd ˈælərdʒi/" },
+        { word: "eye strain", icon: "👁️💻", phonetic: "/aɪ streɪn/" }
+    ];
+
+    let gameActive = false;
+    let timeLeft = 45;
+    let timerInterval = null;
+    let timeoutId = null;
+    let currentWordObj = null;
+    let collectedSet = new Set();
+    let totalAttempts = 0;
+    let correctCount = 0;
+
+    // DOM
+    const bubbleIcon = document.getElementById('bubbleIcon');
+    const bubbleWordLabel = document.getElementById('bubbleWordLabel');
+    const timerDisplay = document.getElementById('timerDisplay');
+    const micButton = document.getElementById('micButton');
+    const ledIndicator = document.getElementById('ledIndicator');
+    const feedbackMsg = document.getElementById('feedbackMsg');
+    const wordsBankContainer = document.getElementById('wordsBankContainer');
+    const scoreStatsSpan = document.getElementById('scoreStats');
+    const startBtn = document.getElementById('startGameBtn');
+    const resetBtn = document.getElementById('resetGameBtn');
+
+    // 语音识别
+    let recognition = null;
+    let isRecognizing = false;
+
+    // 音效 (简单模拟)
+    function playPopSound() { /* 省略音效代码，保持简洁，实际可加上 */ }
+
+    function speakText(text, lang='en-US') {
+        if(window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+            let u = new SpeechSynthesisUtterance(text);
+            u.lang = lang;
+            u.rate = 0.9;
+            window.speechSynthesis.speak(u);
+        }
+    }
+
+    // 初始化语音识别 (增强错误处理)
+    function initSpeechRecognition() {
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+            feedbackMsg.innerHTML = "❌ 浏览器不支持语音识别，请使用 Chrome/Edge";
+            micButton.disabled = true;
+            return false;
+        }
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+        
+        recognition.onstart = () => {
+            isRecognizing = true;
+            micButton.style.opacity = '0.7';
+            feedbackMsg.innerHTML = "🎙️ 正在听你发音...";
+        };
+        recognition.onresult = (event) => {
+            const spoken = event.results[0][0].transcript.trim().toLowerCase().replace(/[^\w\s]/g, '');
+            if (!gameActive || !currentWordObj) return;
+            const expected = currentWordObj.word.toLowerCase();
+            const normalize = s => s.replace(/\s+/g, '');
+            let isMatch = normalize(spoken) === normalize(expected);
+            if (!isMatch && expected.includes(' ')) {
+                isMatch = normalize(spoken).includes(normalize(expected)) || normalize(expected).includes(normalize(spoken));
+            }
+            if (isMatch) {
+                // 正确
+                if (!collectedSet.has(currentWordObj.word)) {
+                    collectedSet.add(currentWordObj.word);
+                    renderWordBank();
+                    correctCount++;
+                }
+                totalAttempts++;
+                updateStats();
+                feedbackMsg.innerHTML = "✅ Good pronunciation!";
+                ledIndicator.className = "led green";
+                playPopSound();
+                createParticles();
+                moveToNextWord();
+                resetWordCycleTimer();
+            } else {
+                totalAttempts++;
+                updateStats();
+                feedbackMsg.innerHTML = `❌ 正确发音: ${currentWordObj.word} ${currentWordObj.phonetic || ''}`;
+                ledIndicator.className = "led yellow";
+                speakText(currentWordObj.word);
+                // 不炸开，但3秒后自动换词
+            }
+            setTimeout(() => { if(gameActive) ledIndicator.className = "led"; }, 800);
+            isRecognizing = false;
+            micButton.style.opacity = '1';
+        };
+        recognition.onerror = (event) => {
+            console.error(event.error);
+            if (event.error === 'not-allowed') {
+                feedbackMsg.innerHTML = "🎤 麦克风权限被拒绝，请允许麦克风后刷新页面";
+            } else if (event.error === 'no-speech') {
+                feedbackMsg.innerHTML = "🎤 未检测到语音，请对着麦克风大声读单词";
+            } else {
+                feedbackMsg.innerHTML = `🎤 识别错误: ${event.error}`;
+            }
+            isRecognizing = false;
+            micButton.style.opacity = '1';
+        };
+        recognition.onend = () => {
+            isRecognizing = false;
+            micButton.style.opacity = '1';
+        };
+        return true;
+    }
+
+    function createParticles() {
+        const bubble = document.getElementById('currentBubble');
+        if(!bubble) return;
+        const rect = bubble.getBoundingClientRect();
+        for(let i=0;i<20;i++) {
+            let p = document.createElement('div');
+            p.className = 'pop-particle';
+            let angle = Math.random()*Math.PI*2;
+            let v = Math.random()*150+50;
+            p.style.setProperty('--dx', Math.cos(angle)*v + 'px');
+            p.style.setProperty('--dy', Math.sin(angle)*v + 'px');
+            p.style.left = (rect.left+rect.width/2-5)+'px';
+            p.style.top = (rect.top+rect.height/2-5)+'px';
+            document.body.appendChild(p);
+            setTimeout(()=>p.remove(),500);
+        }
+    }
+
+    function moveToNextWord() {
+        if (!gameActive) return;
+        let newWord = WORDS_LIST[Math.floor(Math.random()*WORDS_LIST.length)];
+        while (currentWordObj && newWord.word === currentWordObj.word && WORDS_LIST.length>1) newWord = WORDS_LIST[Math.floor(Math.random()*WORDS_LIST.length)];
+        currentWordObj = newWord;
+        bubbleIcon.textContent = currentWordObj.icon;
+        let display = currentWordObj.word.split(' ').map(w=>w[0].toUpperCase()+w.slice(1)).join(' ');
+        bubbleWordLabel.textContent = display;
+    }
+
+    function resetWordCycleTimer() {
+        if(timeoutId) clearTimeout(timeoutId);
+        if(!gameActive) return;
+        timeoutId = setTimeout(() => {
+            if(gameActive) {
+                totalAttempts++;
+                updateStats();
+                feedbackMsg.innerHTML = "⏰ 超时，自动切换到下一个单词";
+                moveToNextWord();
+                resetWordCycleTimer();
+            }
+        }, 3000);
+    }
+
+    function updateStats() {
+        scoreStatsSpan.innerText = `正确:${correctCount} / 尝试:${totalAttempts}`;
+        if(totalAttempts > 0 && correctCount === totalAttempts && collectedSet.size === WORDS_LIST.length) {
+            // 全收集提前结束
+            if(gameActive) endGame();
+        }
+    }
+
+    function renderWordBank() {
+        wordsBankContainer.innerHTML = '';
+        WORDS_LIST.forEach(item => {
+            if(collectedSet.has(item.word)) {
+                let card = document.createElement('div');
+                card.className = 'word-card';
+                card.innerHTML = `<span>${item.icon}</span><span>${item.word}</span>`;
+                card.addEventListener('click', () => speakText(item.word));
+                wordsBankContainer.appendChild(card);
+            }
+        });
+    }
+
+    function endGame() {
+        gameActive = false;
+        if(timerInterval) clearInterval(timerInterval);
+        if(timeoutId) clearTimeout(timeoutId);
+        let accuracy = totalAttempts===0?0:((correctCount/totalAttempts)*100).toFixed(1);
+        feedbackMsg.innerHTML = `🎉 游戏结束！ 班级正确率: ${accuracy}% (${correctCount}/${totalAttempts}) 🎉`;
+        speakText("Great! You know all health words!");
+        micButton.disabled = true;
+        let overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:40%;left:50%;transform:translate(-50%,-50%);background:#000000cc;backdrop-filter:blur(12px);padding:20px 40px;border-radius:60px;color:gold;font-size:1.5rem;z-index:1000;white-space:nowrap;';
+        overlay.innerText = `📊 Class Accuracy: ${accuracy}%`;
+        document.body.appendChild(overlay);
+        setTimeout(()=>overlay.remove(),4000);
+    }
+
+    function startGame() {
+        if(gameActive) return;
+        // 重置所有状态
+        if(timerInterval) clearInterval(timerInterval);
+        if(timeoutId) clearTimeout(timeoutId);
+        gameActive = true;
+        timeLeft = 45;
+        totalAttempts = 0;
+        correctCount = 0;
+        collectedSet.clear();
+        renderWordBank();
+        updateStats();
+        timerDisplay.innerText = `45s`;
+        // 随机起始单词
+        currentWordObj = WORDS_LIST[Math.floor(Math.random()*WORDS_LIST.length)];
+        bubbleIcon.textContent = currentWordObj.icon;
+        bubbleWordLabel.textContent = currentWordObj.word.split(' ').map(w=>w[0].toUpperCase()+w.slice(1)).join(' ');
+        // 倒计时
+        timerInterval = setInterval(() => {
+            if(!gameActive) return;
+            if(timeLeft <= 1) {
+                clearInterval(timerInterval);
+                timerDisplay.innerText = "0s";
+                endGame();
+            } else {
+                timeLeft--;
+                timerDisplay.innerText = `${timeLeft}s`;
+            }
+        }, 1000);
+        resetWordCycleTimer();
+        // 请求麦克风权限 (通过尝试启动一次识别再立即停止，来触发权限请求)
+        if(!recognition) initSpeechRecognition();
+        if(recognition) {
+            try {
+                // 静默请求权限：短暂启动并停止
+                let tempRecog = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+                tempRecog.start();
+                setTimeout(() => tempRecog.stop(), 100);
+            } catch(e) {}
+        }
+        feedbackMsg.innerHTML = "🎙️ 游戏开始！按住麦克风按钮，朗读气泡里的单词！";
+        micButton.disabled = false;
+        speakText("Welcome to AI Bubble Clinic! Let's go!");
+    }
+
+    function resetGame() {
+        if(gameActive) {
+            if(timerInterval) clearInterval(timerInterval);
+            if(timeoutId) clearTimeout(timeoutId);
+            gameActive = false;
+        }
+        if(recognition && isRecognizing) recognition.abort();
+        totalAttempts = 0;
+        correctCount = 0;
+        collectedSet.clear();
+        renderWordBank();
+        updateStats();
+        timeLeft = 45;
+        timerDisplay.innerText = "45s";
+        currentWordObj = WORDS_LIST[0];
+        bubbleIcon.textContent = currentWordObj.icon;
+        bubbleWordLabel.textContent = currentWordObj.word;
+        feedbackMsg.innerHTML = "✨ 点击「开始游戏」开启45秒快闪挑战 ✨";
+        ledIndicator.className = "led";
+        micButton.disabled = true;
+    }
+
+    function startListening() {
+        if(!gameActive) { feedbackMsg.innerHTML = "⏳ 请先点击「开始游戏」"; return; }
+        if(!recognition) { if(!initSpeechRecognition()) return; }
+        if(isRecognizing) return;
+        try {
+            recognition.start();
+        } catch(e) {
+            console.warn(e);
+            feedbackMsg.innerHTML = "🎤 请检查麦克风权限，刷新页面后重试";
+        }
+    }
+    function stopListening() {
+        if(!gameActive) return;
+        if(recognition && isRecognizing) recognition.stop();
+    }
+
+    micButton.addEventListener('mousedown', startListening);
+    micButton.addEventListener('mouseup', stopListening);
+    micButton.addEventListener('touchstart', startListening);
+    micButton.addEventListener('touchend', stopListening);
+    startBtn.addEventListener('click', startGame);
+    resetBtn.addEventListener('click', resetGame);
+    initSpeechRecognition();
+    resetGame();
+</script>
+</body>
+</html>
