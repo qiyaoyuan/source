@@ -18,6 +18,13 @@
   };
 
   var lastReport = null;
+  var cdpProbe = {
+    consoleGetterHit: 0,
+    errorStackGetterHit: 0,
+    lastRunAt: 0,
+    debuggerSamples: [],
+    localhostPorts: []
+  };
 
   function hashString(input) {
     var hash = 2166136261;
@@ -42,6 +49,13 @@
   function markInteraction() {
     if (behavior.firstInteractionAt === null) {
       behavior.firstInteractionAt = Math.round(performance.now() - behavior.startedAt);
+    }
+  }
+
+  function pushLimited(list, item, limit) {
+    list.push(item);
+    if (list.length > limit) {
+      list.shift();
     }
   }
 
@@ -185,6 +199,152 @@
     });
   }
 
+  function runCdpSerializationProbe() {
+    return safe("cdpSerializationProbe", function () {
+      cdpProbe.lastRunAt = Math.round(performance.now());
+
+      var probeObject = {};
+      Object.defineProperty(probeObject, "cdpGetterProbe", {
+        get: function () {
+          cdpProbe.consoleGetterHit += 1;
+          return "getter-read";
+        }
+      });
+
+      var error = new Error("cdp-stack-probe");
+      Object.defineProperty(error, "stack", {
+        get: function () {
+          cdpProbe.errorStackGetterHit += 1;
+          return "stack-read";
+        }
+      });
+
+      console.debug("automation-detection-cdp-probe", probeObject, error);
+      return {
+        consoleGetterHit: cdpProbe.consoleGetterHit,
+        errorStackGetterHit: cdpProbe.errorStackGetterHit,
+        lastRunAt: cdpProbe.lastRunAt,
+        note: "Getter hits can happen when a CDP Runtime client requests console object previews."
+      };
+    }, {
+      consoleGetterHit: cdpProbe.consoleGetterHit,
+      errorStackGetterHit: cdpProbe.errorStackGetterHit,
+      lastRunAt: cdpProbe.lastRunAt,
+      note: "probe failed"
+    });
+  }
+
+  function runDebuggerTimingProbe() {
+    return safe("debuggerTimingProbe", function () {
+      var samples = [];
+      for (var i = 0; i < 3; i += 1) {
+        var before = performance.now();
+        // This intentionally measures whether an attached inspector pauses on debugger statements.
+        debugger;
+        samples.push(Number((performance.now() - before).toFixed(3)));
+      }
+      cdpProbe.debuggerSamples = samples;
+      return {
+        samplesMs: samples,
+        maxMs: Math.max.apply(Math, samples),
+        avgMs: Number((samples.reduce(function (sum, value) { return sum + value; }, 0) / samples.length).toFixed(3))
+      };
+    }, {
+      samplesMs: [],
+      maxMs: 0,
+      avgMs: 0,
+      error: "debugger timing probe failed"
+    });
+  }
+
+  function getErrorStackProbe() {
+    return safe("errorStackProbe", function () {
+      var stack = new Error("automation-stack-probe").stack || "";
+      var lines = stack.split("\n").map(function (line) { return line.trim(); }).filter(Boolean);
+      var automationHints = lines.filter(function (line) {
+        return /puppeteer|playwright|selenium|webdriver|__puppeteer|__playwright|evaluate|ExecutionContext|Runtime\.evaluate/i.test(line);
+      });
+      return {
+        lineCount: lines.length,
+        firstLine: lines[0] || "",
+        formatHash: hashString(lines.slice(0, 6).join("\n")),
+        automationHints: automationHints.slice(0, 8),
+        stackTraceLimit: Error.stackTraceLimit
+      };
+    }, {
+      lineCount: 0,
+      firstLine: "",
+      formatHash: null,
+      automationHints: [],
+      error: "stack probe failed"
+    });
+  }
+
+  function probeDebugPort(port) {
+    var urls = [
+      "http://127.0.0.1:" + port + "/json/version",
+      "http://localhost:" + port + "/json/version"
+    ];
+    var timeoutMs = 900;
+    var attempts = urls.map(function (url) {
+      return new Promise(function (resolve) {
+        var settled = false;
+        var timer = setTimeout(function () {
+          if (!settled) {
+            settled = true;
+            resolve({ url: url, status: "timeout" });
+          }
+        }, timeoutMs);
+
+        fetch(url, {
+          mode: "no-cors",
+          cache: "no-store"
+        }).then(function () {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            resolve({ url: url, status: "reachable" });
+          }
+        }).catch(function (error) {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            resolve({
+              url: url,
+              status: "blocked-or-closed",
+              error: error && error.name ? error.name : "fetch-error"
+            });
+          }
+        });
+      });
+    });
+
+    return Promise.all(attempts).then(function (results) {
+      return {
+        port: port,
+        reachable: results.some(function (item) { return item.status === "reachable"; }),
+        results: results
+      };
+    });
+  }
+
+  function runDebugPortProbe() {
+    return Promise.all([9222, 9223].map(probeDebugPort)).then(function (ports) {
+      cdpProbe.localhostPorts = ports;
+      return {
+        checkedPorts: ports,
+        reachablePorts: ports.filter(function (item) { return item.reachable; }).map(function (item) { return item.port; }),
+        note: "Only common local debug ports are checked. Browser policy, file origin, CORS, or private-network rules can affect this signal."
+      };
+    }).catch(function (error) {
+      return {
+        checkedPorts: [],
+        reachablePorts: [],
+        error: error && error.message ? error.message : String(error)
+      };
+    });
+  }
+
   function getNavigatorData() {
     return {
       userAgent: navigator.userAgent,
@@ -277,6 +437,12 @@
     for (var i = 1; i < behavior.clickTimes.length; i += 1) {
       clickIntervals.push(behavior.clickTimes[i] - behavior.clickTimes[i - 1]);
     }
+    var clicks = behavior.clickDetails || [];
+    var centerClicks = clicks.filter(function (item) { return item.centerDistanceRatio !== null && item.centerDistanceRatio < 0.08; }).length;
+    var untrustedEvents =
+      (behavior.untrustedPointerMoves || 0) +
+      (behavior.untrustedClicks || 0) +
+      (behavior.untrustedKeys || 0);
     return {
       elapsedMs: Math.round(performance.now() - behavior.startedAt),
       firstInteractionAtMs: behavior.firstInteractionAt,
@@ -290,8 +456,47 @@
       pointerSampleCount: behavior.pointerSamples.length,
       clickIntervalStddev: Math.round(stddev(clickIntervals)),
       keyIntervalStddev: Math.round(stddev(behavior.keyIntervals)),
+      centerClickRatio: clicks.length ? Number((centerClicks / clicks.length).toFixed(2)) : 0,
+      noRecentPointerMoveClicks: behavior.noRecentPointerMoveClicks || 0,
+      repeatedCoordinateClicks: countRepeatedClickCoordinates(clicks),
+      straightLineApproachClicks: behavior.straightLineApproachClicks || 0,
+      untrustedEvents: untrustedEvents,
+      clickDetails: clicks.slice(-20),
       lastPointerSamples: behavior.pointerSamples.slice(-12)
     };
+  }
+
+  function countRepeatedClickCoordinates(clicks) {
+    var seen = {};
+    var repeated = 0;
+    clicks.forEach(function (item) {
+      var key = item.x + "," + item.y;
+      seen[key] = (seen[key] || 0) + 1;
+      if (seen[key] === 3) {
+        repeated += 1;
+      }
+    });
+    return repeated;
+  }
+
+  function getApproachStraightness(x, y) {
+    var samples = behavior.pointerSamples.slice(-18);
+    if (samples.length < 4) {
+      return null;
+    }
+    var path = 0;
+    for (var i = 1; i < samples.length; i += 1) {
+      path += distance(samples[i - 1].x, samples[i - 1].y, samples[i].x, samples[i].y);
+    }
+    var direct = distance(samples[0].x, samples[0].y, x, y);
+    if (direct < 2 || path < 2) {
+      return null;
+    }
+    return Number((path / direct).toFixed(3));
+  }
+
+  function distance(x1, y1, x2, y2) {
+    return Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2));
   }
 
   function addFinding(findings, category, title, detail, points, severity) {
@@ -373,6 +578,26 @@
       addFinding(findings, "行为", "多次点击但没有鼠标移动", "桌面真人操作一般会在点击前产生 pointer/mouse 轨迹。", 12, "warn");
     }
 
+    if (behaviorData.noRecentPointerMoveClicks >= 2) {
+      addFinding(findings, "CDP/Puppeteer弱信号", "点击前缺少近期 pointer 轨迹", "CDP 或自动化工具可能直接派发底层点击，页面只能看到点击，没有自然接近过程。", 10, "warn");
+    }
+
+    if (behaviorData.clicks >= 3 && behaviorData.centerClickRatio >= 0.75) {
+      addFinding(findings, "CDP/Puppeteer弱信号", "点击落点高度集中在元素中心", "自动化工具常默认点击元素几何中心，真人点击通常有更大落点噪声。", 8, "warn");
+    }
+
+    if (behaviorData.repeatedCoordinateClicks > 0) {
+      addFinding(findings, "CDP/Puppeteer弱信号", "多次点击完全相同坐标", "重复坐标命中常见于脚本化动作或固定录制回放。", 6, "warn");
+    }
+
+    if (behaviorData.straightLineApproachClicks >= 2) {
+      addFinding(findings, "CDP/Puppeteer弱信号", "点击前轨迹过于笔直", "多次接近目标的路径接近几何直线，适合作为弱风险信号。", 6, "warn");
+    }
+
+    if (behaviorData.untrustedEvents > 0) {
+      addFinding(findings, "强信号", "发现非可信交互事件", "脚本 dispatchEvent 产生的事件通常 isTrusted=false。", 20, "danger");
+    }
+
     if (behaviorData.clicks >= 4 && behaviorData.clickIntervalStddev > 0 && behaviorData.clickIntervalStddev < 80) {
       addFinding(findings, "行为", "点击节奏过于稳定", "多次点击间隔波动很低，可能是脚本节拍。", 7, "warn");
     }
@@ -383,6 +608,22 @@
 
     if (behaviorData.firstInteractionAtMs !== null && behaviorData.firstInteractionAtMs < 250) {
       addFinding(findings, "行为", "首个交互发生过快", "页面加载后极短时间内开始操作，适合作为弱风险信号。", 4, "info");
+    }
+
+    if (report.cdpSerializationProbe.consoleGetterHit || report.cdpSerializationProbe.errorStackGetterHit) {
+      addFinding(findings, "Inspector/CDP", "console 序列化探针被触发", "页面对象被 console/CDP 读取时触发 getter，说明存在调试器或控制端读取对象预览的可能。", 8, "warn");
+    }
+
+    if (report.debuggerTimingProbe && report.debuggerTimingProbe.maxMs > 120) {
+      addFinding(findings, "Inspector/CDP", "debugger 语句出现明显暂停", "debugger statement 执行耗时异常，可能存在已打开 DevTools 或已启用 Debugger 的控制端。", 12, "warn");
+    }
+
+    if (report.errorStackProbe && report.errorStackProbe.automationHints && report.errorStackProbe.automationHints.length) {
+      addFinding(findings, "Inspector/CDP", "Error.stack 出现自动化相关帧", report.errorStackProbe.automationHints.join(" | "), 15, "warn");
+    }
+
+    if (report.debugPortProbe && report.debugPortProbe.reachablePorts && report.debugPortProbe.reachablePorts.length) {
+      addFinding(findings, "Inspector/CDP", "发现常见本地 debug 端口可达", "可达端口: " + report.debugPortProbe.reachablePorts.join(", ") + "。这可能意味着浏览器开启了 remote debugging。", 18, "warn");
     }
 
     if (!findings.length) {
@@ -417,7 +658,7 @@
     return [
       { label: "自动化强信号", value: report.score.findings.filter(function (item) { return item.category === "强信号" && item.points > 0; }).length },
       { label: "一致性问题", value: report.score.findings.filter(function (item) { return item.category === "一致性"; }).length },
-      { label: "运行时/图形问题", value: report.score.findings.filter(function (item) { return item.category === "运行时" || item.category === "图形"; }).length },
+      { label: "Inspector/CDP信号", value: report.score.findings.filter(function (item) { return item.category === "CDP/Puppeteer弱信号" || item.category === "Inspector/CDP"; }).length },
       { label: "行为样本", value: report.behavior.moves + " moves / " + report.behavior.clicks + " clicks" }
     ];
   }
@@ -463,7 +704,8 @@
     document.getElementById("statusText").textContent = "正在采集信号...";
     return Promise.all([
       getHighEntropyValues(),
-      getAudioHash()
+      getAudioHash(),
+      runDebugPortProbe()
     ]).then(function (values) {
       var report = {
         generatedAt: new Date().toISOString(),
@@ -472,6 +714,10 @@
         highEntropyUserAgentData: values[0],
         environment: getEnvironmentData(),
         automationGlobals: getAutomationGlobals(),
+        cdpSerializationProbe: runCdpSerializationProbe(),
+        debuggerTimingProbe: runDebuggerTimingProbe(),
+        errorStackProbe: getErrorStackProbe(),
+        debugPortProbe: values[2],
         iframeConsistency: getIframeConsistency(),
         nativeIntegrity: getNativeIntegrity(),
         graphics: {
@@ -498,10 +744,18 @@
     behavior.paste = 0;
     behavior.pointerSamples = [];
     behavior.clickTimes = [];
+    behavior.clickDetails = [];
     behavior.keyIntervals = [];
     behavior.lastKeyAt = 0;
     behavior.firstInteractionAt = null;
     behavior.visibilityChanges = 0;
+    behavior.noRecentPointerMoveClicks = 0;
+    behavior.straightLineApproachClicks = 0;
+    behavior.untrustedPointerMoves = 0;
+    behavior.untrustedClicks = 0;
+    behavior.untrustedKeys = 0;
+    behavior.lastPointerMoveAt = 0;
+    behavior.lastPointerPosition = null;
     runDetection();
   }
 
@@ -522,20 +776,59 @@
 
   window.addEventListener("pointermove", function (event) {
     behavior.moves += 1;
+    if (event.isTrusted === false) {
+      behavior.untrustedPointerMoves = (behavior.untrustedPointerMoves || 0) + 1;
+    }
+    behavior.lastPointerMoveAt = performance.now();
+    behavior.lastPointerPosition = {
+      x: Math.round(event.clientX),
+      y: Math.round(event.clientY)
+    };
     markInteraction();
-    if (behavior.pointerSamples.length < 200) {
-      behavior.pointerSamples.push({
+    pushLimited(behavior.pointerSamples, {
         t: Math.round(performance.now() - behavior.startedAt),
         x: Math.round(event.clientX),
         y: Math.round(event.clientY),
         type: event.pointerType || "unknown"
-      });
-    }
+      }, 500);
   }, { passive: true });
 
-  window.addEventListener("click", function () {
+  window.addEventListener("click", function (event) {
     behavior.clicks += 1;
     behavior.clickTimes.push(Math.round(performance.now()));
+    if (event.isTrusted === false) {
+      behavior.untrustedClicks = (behavior.untrustedClicks || 0) + 1;
+    }
+    var now = performance.now();
+    var rect = event.target && event.target.getBoundingClientRect ? event.target.getBoundingClientRect() : null;
+    var centerDistanceRatio = null;
+    if (rect && rect.width > 0 && rect.height > 0) {
+      var centerX = rect.left + rect.width / 2;
+      var centerY = rect.top + rect.height / 2;
+      centerDistanceRatio = Number((distance(event.clientX, event.clientY, centerX, centerY) / Math.max(1, Math.min(rect.width, rect.height))).toFixed(3));
+    }
+    var recentPointerMoveMs = behavior.lastPointerMoveAt ? Math.round(now - behavior.lastPointerMoveAt) : null;
+    if (recentPointerMoveMs === null || recentPointerMoveMs > 1200) {
+      behavior.noRecentPointerMoveClicks = (behavior.noRecentPointerMoveClicks || 0) + 1;
+    }
+    var straightness = getApproachStraightness(event.clientX, event.clientY);
+    if (straightness !== null && straightness < 1.08) {
+      behavior.straightLineApproachClicks = (behavior.straightLineApproachClicks || 0) + 1;
+    }
+    if (!behavior.clickDetails) {
+      behavior.clickDetails = [];
+    }
+    pushLimited(behavior.clickDetails, {
+      t: Math.round(now - behavior.startedAt),
+      x: Math.round(event.clientX),
+      y: Math.round(event.clientY),
+      target: event.target && event.target.dataset ? event.target.dataset.probeTarget || event.target.tagName : event.target.tagName,
+      isTrusted: event.isTrusted,
+      detail: event.detail,
+      recentPointerMoveMs: recentPointerMoveMs,
+      centerDistanceRatio: centerDistanceRatio,
+      approachStraightness: straightness
+    }, 100);
     markInteraction();
     setTimeout(runDetection, 50);
   }, { passive: true });
@@ -550,9 +843,12 @@
     markInteraction();
   }, { passive: true });
 
-  window.addEventListener("keydown", function () {
+  window.addEventListener("keydown", function (event) {
     var now = performance.now();
     behavior.keydowns += 1;
+    if (event.isTrusted === false) {
+      behavior.untrustedKeys = (behavior.untrustedKeys || 0) + 1;
+    }
     if (behavior.lastKeyAt) {
       behavior.keyIntervals.push(Math.round(now - behavior.lastKeyAt));
     }
