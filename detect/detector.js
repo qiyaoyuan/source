@@ -1176,40 +1176,16 @@
     }, Promise.resolve({ supported: false }));
   }
 
-  // 异常序列化探针：console.debug 之外，Runtime.exceptionThrown 同样会触发
-  // inspector 对异常对象做 preview 序列化。若 9eef07f0 只堵了 console 路径，
-  // 这里仍会命中 getter。
+  // 异常序列化探针容易被 Chrome 自身错误展示、DevTools 或页面错误处理链触发，
+  // 默认只保留说明，不主动 throw/reject，也不参与风险评分。
   function runExceptionSerializationProbe() {
-    return safe("exceptionSerializationProbe", function () {
-      antiFp.exceptionProbeAt = Math.round(performance.now());
-      var probe = { marker: "exception-serialization-probe" };
-      Object.defineProperty(probe, "leakProp", {
-        get: function () {
-          antiFp.exceptionGetterHit += 1;
-          return "leak";
-        }
-      });
-      Object.defineProperty(probe, "toString", {
-        value: function () {
-          antiFp.exceptionToStringHit += 1;
-          return "ExceptionProbe";
-        }
-      });
-      // 异步 throw：走 Runtime.exceptionThrown，不被页面 catch
-      setTimeout(function () { throw probe; }, 0);
-      // Promise rejection 通道
-      safe("exceptionReject", function () { Promise.reject(probe); });
-      return {
-        exceptionGetterHit: antiFp.exceptionGetterHit,
-        exceptionToStringHit: antiFp.exceptionToStringHit,
-        lastRunAt: antiFp.exceptionProbeAt,
-        note: "Getter hits indicate the inspector is serializing uncaught exceptions (Runtime.exceptionThrown preview path)."
-      };
-    }, {
+    return {
+      enabled: false,
       exceptionGetterHit: antiFp.exceptionGetterHit,
       exceptionToStringHit: antiFp.exceptionToStringHit,
-      lastRunAt: antiFp.exceptionProbeAt
-    });
+      lastRunAt: antiFp.exceptionProbeAt,
+      note: "Disabled by default because uncaught exception / unhandled rejection probes can false-positive in ordinary Chrome. Use CDP Stack Check and console serialization probes for default scoring."
+    };
   }
 
   // webdriver 伪装回归：值 + 描述符 + 跨 realm 一致性 + 运行期翻转
@@ -1675,8 +1651,7 @@
         (report.cdpObjectInspectionProbe && report.cdpObjectInspectionProbe.hits > 0) ||
         (report.debuggerTimingProbe && report.debuggerTimingProbe.maxMs > 120) ||
         (report.debugPortProbe && report.debugPortProbe.reachablePorts.length > 0) ||
-        report.traces.length > 0 ||
-        (report.exceptionSerializationProbe && report.exceptionSerializationProbe.exceptionGetterHit > 0);
+        report.traces.length > 0;
     }
 
     var wsp = report.webdriverSpoofProbe;
@@ -1701,15 +1676,6 @@
         addFinding(findings, "内核对抗回归", "webdriver 跨 realm 不一致",
           "主页面与 iframe clean realm 取值不同，伪装未覆盖全部执行上下文。", 12, "warn");
       }
-    }
-
-    var esp = report.exceptionSerializationProbe;
-    if (esp && (esp.exceptionGetterHit > 0 || esp.exceptionToStringHit > 0)) {
-      addFinding(findings, "内核对抗回归", "异常通道仍在触发 inspector 序列化",
-        "uncaught exception / unhandled rejection 的 preview 序列化触发 getter " +
-        (esp.exceptionGetterHit + esp.exceptionToStringHit) +
-        " 次。9eef07f0 的 Runtime inspector 抑制若只覆盖 console 路径，Runtime.exceptionThrown 仍可作旁路检测。",
-        10, "warn");
     }
 
     var wp = report.workerProbe;
