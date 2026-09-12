@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Automation Detection Lab</title>
+  <title>Agent Automation Detection Lab</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <main class="shell">
     <section class="topbar">
       <div>
-        <p class="eyebrow">Browser Automation Detection Lab</p>
-        <h1>自动化操作检测页</h1>
-        <p class="intro">采集浏览器环境、自动化痕迹、运行时一致性、图形指纹和交互行为，生成一个可解释风险分。</p>
+        <p class="eyebrow">AgentRuntime / CDP Automation Detection Lab</p>
+        <h1>Agent 自动化操作检测靶场</h1>
+        <p class="intro">针对 X5Use Agent（chrome.debugger + CDP Input/Runtime）与业界通用自动化手段的全覆盖检测。
+          采集 AgentRuntime 专属痕迹、CDP attach 信号、输入事件保真度、运行时一致性与行为统计，输出可解释风险分。</p>
       </div>
       <div class="score-card" aria-live="polite">
         <span class="score-label">Risk Score</span>
@@ -28,20 +29,125 @@
       <span id="statusText" class="status">正在初始化检测...</span>
     </section>
 
-    <section class="behavior-pad" aria-label="行为采样区">
-      <div>
-        <h2>行为采样区</h2>
-        <p>在这里移动鼠标、点击、滚动或输入文字。页面会实时观察交互节奏，但不会上传任何数据。</p>
-        <div class="probe-targets" aria-label="点击采样靶场">
-          <button type="button" class="probe-btn" data-probe-target="alpha">目标 A</button>
-          <button type="button" class="probe-btn" data-probe-target="beta">目标 B</button>
-          <button type="button" class="probe-btn" data-probe-target="gamma">目标 C</button>
+    <section class="strategy-map" aria-label="外部检测策略映射">
+      <div class="report-head">
+        <h2>外部检测策略映射</h2>
+        <p>本页把线上检测页拆成可解释的前端信号，用于内部回归。商业挑战类页面不复刻私有模型，只做端到端结果对照。</p>
+      </div>
+      <div class="strategy-grid">
+        <article><strong>Fingerprint Scan / DeviceAndBrowserInfo</strong><span>WebDriver、CDP Stack Check、Worker/Iframe、UA-CH、WebGL/GPU 一致性</span></article>
+        <article><strong>Rebrowser / Brotector</strong><span>Runtime.enable、Console.enable、sourceURL、exposeFunction、CDP input、stack signature</span></article>
+        <article><strong>bot-signal / SannySoft</strong><span>自动化框架全局变量、Headless、native function、plugins、languages、行为节奏</span></article>
+        <article><strong>BrowserScan / CreepJS / BrowserLeaks / Pixelscan</strong><span>Canvas、WebGL、Audio、Screen、Timezone、Permissions、Media、Speech 横向一致性</span></article>
+        <article><strong>Cloudflare / reCAPTCHA / DataDome</strong><span>真实挑战和商业站点只做低频兼容性观测，结合本页 JSON 定位前端可解释信号</span></article>
+      </div>
+    </section>
+
+    <section class="guide" aria-label="Agent 联调指引">
+      <details>
+        <summary>Agent 联调指引：建议让 Agent 对下面靶场依次执行的 action（点击展开）</summary>
+        <table class="guide-table">
+          <thead>
+            <tr><th>Agent action</th><th>靶场目标</th><th>本页对应检测点</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>get_state / snapshot</code></td><td>整页</td><td>data-hi 属性注入、#playwright-highlight-container、Runtime.evaluate 轮询节奏</td></tr>
+            <tr><td><code>click_element</code></td><td>按钮 A / 按钮 B</td><td>无轨迹瞬移点击、几何中心点击、coalesced=0、isTrusted=false(JS 降级)</td></tr>
+            <tr><td><code>dblclick_element</code></td><td>双击区</td><td>detail 序列、两次点击坐标完全一致、JS 降级 dblclick</td></tr>
+            <tr><td><code>hover_element</code></td><td>Hover 区</td><td>mouseenter/mouseover isTrusted=false（主路径为 JS dispatch）</td></tr>
+            <tr><td><code>focus_element</code></td><td>输入框</td><td>focusin 无前置 pointerdown/Tab</td></tr>
+            <tr><td><code>input_text</code></td><td>输入框</td><td>value 静默清空、固定 5ms 击键间隔、insertText 无 key 事件</td></tr>
+            <tr><td><code>keyboard_op / send_keys</code></td><td>输入框</td><td>Input.insertText 无 keydown、击键节奏方差≈0</td></tr>
+            <tr><td><code>check_op</code></td><td>复选框</td><td>click isTrusted=false（纯 JS click）</td></tr>
+            <tr><td><code>select_dropdown_option</code></td><td>下拉框</td><td>change isTrusted=false 且无前置 pointerdown/focus</td></tr>
+            <tr><td><code>scroll_down/up/by</code></td><td>滚动容器 / 页面</td><td>scroll 事件无 wheel/touch/key 前驱</td></tr>
+            <tr><td><code>mouse_op(wheel)</code></td><td>滚动容器</td><td>wheel 事件坐标/合成特征</td></tr>
+            <tr><td><code>drag_drop</code></td><td>拖拽区</td><td>dragstart/drop isTrusted=false、合成 DataTransfer</td></tr>
+            <tr><td><code>eval_content_js</code></td><td>整页</td><td>Error.stack 帧、console 序列化 getter 探针</td></tr>
+            <tr><td><code>screenshot(fullPage)</code></td><td>整页</td><td>viewport 突变（Emulation.setDeviceMetricsOverride）、蒙层 visibility 切换</td></tr>
+            <tr><td>内核 commit <code>f98b861a</code><br>webdriver 伪装</td><td>自动回归</td><td>webdriver 跨 realm（主页面/iframe/Worker）一致性、运行期翻转监控、"webdriver=false 但 CDP 痕迹可检出"的 gap 判定</td></tr>
+            <tr><td>内核 commit <code>9eef07f0</code><br>V8 Runtime inspector 抑制</td><td>自动回归</td><td>主世界 + Worker isolate 双路 console getter 探针、异常序列化旁路（Runtime.exceptionThrown preview）、Worker 内 debugger 时序</td></tr>
+          </tbody>
+        </table>
+      </details>
+    </section>
+
+    <section class="trace" aria-label="AgentRuntime 痕迹监视">
+      <div class="report-head">
+        <h2>AgentRuntime 痕迹监视（MutationObserver 实时捕获）</h2>
+        <p>监听 <code>data-hi</code>、<code>data-__cdp-locate</code>、<code>data-x5-overlay</code> 属性注入与 <code>#playwright-highlight-container</code>、<code>#x5-overlay-*</code> 节点创建。命中即 AgentRuntime 石锤信号，即使随后被移除也会留痕。</p>
+      </div>
+      <div id="traceLog" class="trace-log"><p class="empty">暂无异动记录。让 Agent 执行 get_state / click_element 后观察此处。</p></div>
+    </section>
+
+    <section class="playground" aria-label="交互靶场">
+      <div class="report-head">
+        <h2>交互靶场</h2>
+        <p>每个目标带独立事件序列记录与判定。可人工操作建立"真人基线"，再让 Agent 操作同一目标做对照。</p>
+      </div>
+      <div class="target-grid">
+        <div class="target-card">
+          <h3>点击目标 <span class="probe-tag">click_element</span></h3>
+          <button type="button" class="probe-target" data-probe="btnA">按钮 A</button>
+          <button type="button" class="probe-target" data-probe="btnB">按钮 B</button>
+          <div class="verdict" data-verdict="btnA">等待操作</div>
+          <div class="verdict" data-verdict="btnB">等待操作</div>
+        </div>
+        <div class="target-card">
+          <h3>双击目标 <span class="probe-tag">dblclick_element</span></h3>
+          <div class="dbl-pad probe-target" data-probe="dblPad">双击此区域</div>
+          <div class="verdict" data-verdict="dblPad">等待操作</div>
+        </div>
+        <div class="target-card">
+          <h3>Hover 目标 <span class="probe-tag">hover_element</span></h3>
+          <div class="hover-pad probe-target" data-probe="hoverPad">悬停此区域</div>
+          <div class="verdict" data-verdict="hoverPad">等待操作</div>
+        </div>
+        <div class="target-card">
+          <h3>输入目标 <span class="probe-tag">input_text / keyboard_op</span></h3>
+          <input class="probe-target" data-probe="textInput" type="text" placeholder="单行输入框">
+          <textarea class="probe-target" data-probe="textArea" rows="3" placeholder="多行输入框（input_text 会先静默清空再逐字输入）"></textarea>
+          <div class="verdict" data-verdict="textInput">等待操作</div>
+          <div class="verdict" data-verdict="textArea">等待操作</div>
+        </div>
+        <div class="target-card">
+          <h3>选择 / 勾选 <span class="probe-tag">select_dropdown_option / check_op</span></h3>
+          <select class="probe-target" data-probe="selectBox">
+            <option value="">请选择</option>
+            <option value="apple">Apple</option>
+            <option value="banana">Banana</option>
+            <option value="cherry">Cherry</option>
+          </select>
+          <label class="check-line"><input class="probe-target" data-probe="checkBox" type="checkbox"> 复选框</label>
+          <div class="verdict" data-verdict="selectBox">等待操作</div>
+          <div class="verdict" data-verdict="checkBox">等待操作</div>
+        </div>
+        <div class="target-card">
+          <h3>滚动容器 <span class="probe-tag">scroll_* / mouse_op wheel</span></h3>
+          <div class="scroll-pad probe-target" data-probe="scrollPad">
+            <div class="scroll-inner">
+              <p>滚动内容 01</p><p>滚动内容 02</p><p>滚动内容 03</p><p>滚动内容 04</p>
+              <p>滚动内容 05</p><p>滚动内容 06</p><p>滚动内容 07</p><p>滚动内容 08</p>
+              <p>滚动内容 09</p><p>滚动内容 10</p><p>滚动内容 11</p><p>滚动内容 12</p>
+            </div>
+          </div>
+          <div class="verdict" data-verdict="scrollPad">等待操作</div>
+        </div>
+        <div class="target-card">
+          <h3>拖拽 <span class="probe-tag">drag_drop</span></h3>
+          <div class="drag-src probe-target" data-probe="dragSrc" draggable="true">拖拽源</div>
+          <div class="drag-dst probe-target" data-probe="dragDst">拖放到这里</div>
+          <div class="verdict" data-verdict="dragSrc">等待操作</div>
         </div>
       </div>
-      <label>
-        <span>输入测试</span>
-        <textarea id="typingProbe" rows="4" placeholder="可以随便输入几句话，用于观察输入间隔、修正和粘贴行为。"></textarea>
-      </label>
+    </section>
+
+    <section class="timeline-wrap" aria-label="事件时间线">
+      <div class="report-head">
+        <h2>关键事件时间线</h2>
+        <p>最近 80 条关键交互事件。<span class="mini-tag trusted">trusted</span> 为可信事件，<span class="mini-tag untrusted">untrusted</span> 为 JS 派发事件。</p>
+      </div>
+      <div id="timeline" class="timeline"><p class="empty">暂无事件</p></div>
     </section>
 
     <section class="summary-grid" id="summaryGrid" aria-label="检测摘要"></section>
