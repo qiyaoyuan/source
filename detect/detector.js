@@ -106,7 +106,6 @@
     errorStackGetterHit: 0,
     toJsonHit: 0,
     lastRunAt: 0,
-    debuggerSamples: [],
     stackCheckRuns: 0,
     // ---- 会话内 latch / 采样统计（解决 CDP 间歇消费导致的"偶现非必现"）----
     serializationSamples: 0,      // 序列化探针累计采样次数
@@ -129,9 +128,17 @@
   var antiFp = {
     webdriverSamples: [],
     webdriverFlip: false,
-    exceptionGetterHit: 0,
-    exceptionToStringHit: 0,
-    exceptionProbeAt: 0,
+    bindingPersistenceProbe: {
+      enabled: false,
+      status: "not-run",
+      note: "需由控制端先调用 Runtime.addBinding，再运行页面暴露的 binding 回归 API。"
+    },
+    exceptionProbeResult: {
+      enabled: false,
+      exceptionGetterHit: 0,
+      note: "默认关闭；仅通过 window.__automationDetectLab.runExceptionSerializationProbe() 手动运行。"
+      note: "等待页面加载后执行一次异常序列化探针。"
+    },
     worker: null
   };
 
@@ -1139,23 +1146,101 @@
     window.__automationDetectLab.readObjectInspectionHits = function () {
       return window.__automationDetectLab.objectInspectionHits;
     };
+    window.__automationDetectLab.runBindingPersistenceProbe = function (bindingName) {
+      return runBindingPersistenceProbe(bindingName).then(function (result) {
+        antiFp.bindingPersistenceProbe = result;
+        scheduleDetection();
+        return result;
+      });
+    };
+    window.__automationDetectLab.runExceptionSerializationProbe = function () {
+      return runExceptionSerializationProbe().then(function (result) {
+        antiFp.exceptionProbeResult = result;
+        scheduleDetection();
+        return result;
+      });
+    };
+  }
+
+  function runBindingPersistenceProbe(bindingName) {
+    return new Promise(function (resolve) {
+      var name = typeof bindingName === "string" ? bindingName : "";
+      if (!/^[$A-Z_a-z][$\w]*$/.test(name)) {
+        resolve({
+          enabled: true,
+          status: "invalid-name",
+          bindingName: name,
+          note: "bindingName 必须是合法的 JavaScript 标识符。"
+        });
+        return;
+      }
+
+      var mainPresent = name in window;
+      if (!mainPresent) {
+        resolve({
+          enabled: true,
+          status: "setup-missing",
+          bindingName: name,
+          mainPresent: false,
+          iframePresent: null,
+          note: "当前主 Context 中未发现 binding；请先由控制端执行 Runtime.addBinding。"
+        });
+        return;
+      }
+
+      var iframe = document.createElement("iframe");
+      iframe.style.display = "none";
+      iframe.setAttribute("title", "runtime binding persistence probe");
+      iframe.srcdoc = "<!doctype html><title>binding probe</title>";
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) { return; }
+        settled = true;
+        iframe.remove();
+        resolve({
+          enabled: true,
+          status: "timeout",
+          bindingName: name,
+          mainPresent: true,
+          iframePresent: null,
+          note: "新 iframe 未在限定时间内完成加载。"
+        });
+      }, 1500);
+
+      iframe.onload = function () {
+        if (settled) { return; }
+        settled = true;
+        clearTimeout(timer);
+        var iframePresent = safe("bindingIframeCheck", function () {
+          return name in iframe.contentWindow;
+        }, null);
+        iframe.remove();
+        resolve({
+          enabled: true,
+          status: iframePresent === false ? "suppressed" :
+            (iframePresent === true ? "propagated" : "inconclusive"),
+          bindingName: name,
+          mainPresent: true,
+          iframePresent: iframePresent,
+          note: iframePresent === false ?
+            "主 Context 已注入，但新 iframe 未恢复 binding：addBindings() 抑制行为已观察到。" :
+            (iframePresent === true ?
+              "新 iframe 也出现 binding：Runtime.addBinding 的新 Context 传播未被抑制。" :
+              "无法读取新 iframe Context，结果不确定。")
+        });
+      };
+      document.body.appendChild(iframe);
+    });
   }
 
   function runDebuggerTimingProbe() {
-    return safe("debuggerTimingProbe", function () {
-      var samples = [];
-      for (var i = 0; i < 3; i += 1) {
-        var before = performance.now();
-        // 原 debugger 断点已移除，避免打开 DevTools 时反复中断
-        samples.push(Number((performance.now() - before).toFixed(3)));
-      }
-      cdpProbe.debuggerSamples = samples;
-      return {
-        samplesMs: samples,
-        maxMs: Math.max.apply(Math, samples),
-        avgMs: Number(mean(samples).toFixed(3))
-      };
-    }, { samplesMs: [], maxMs: 0, avgMs: 0, error: "debugger timing probe failed" });
+    return {
+      enabled: false,
+      samplesMs: [],
+      maxMs: 0,
+      avgMs: 0,
+      note: "已停用：页面不再执行 debugger;，避免用户打开 DevTools 时被反复暂停。"
+    };
   }
 
   function getErrorStackProbe() {
@@ -1180,8 +1265,8 @@
    *     commit 9eef07f0 V8 Runtime inspector 抑制）
    * ================================================================ */
 
-  // Worker isolate 探针：commit 9eef07f0 声称覆盖每个 Worker isolate，
-  // 在 Worker 内复跑 console getter / debugger 时序 / webdriver，验证无遗漏。
+  // Worker isolate 探针：在 Worker 内复跑 console getter，并采集基础环境，
+  // 验证 Runtime inspector 抑制是否覆盖 Worker isolate。
   function runWorkerProbe() {
     return safe("workerProbe", function () {
       if (!window.Worker || !window.Blob) { return Promise.resolve({ supported: false }); }
@@ -1192,28 +1277,11 @@
         'var err = new Error("worker-stack-probe");',
         'Object.defineProperty(err, "stack", { get: function () { hits.stackGetter += 1; return "s"; } });',
         'console.debug("worker-cdp-probe", obj, err);',
-        // 异常序列化旁路探针（Worker 版）：commit 3e0d8f90 只 guard 了 messageAdded(console)，
-        // 未 guard V8InspectorImpl::exceptionThrown。用非标准属性名挂 getter，避免被标准 error handler 读到。
-        'var excHits = 0;',
-        'try {',
-        '  self.addEventListener("unhandledrejection", function (e) { if (e && e.preventDefault) e.preventDefault(); });',
-        '  var eo = {};',
-        '  Object.defineProperty(eo, "__cdp_exc_trap__", { enumerable: true, get: function () { excHits += 1; return 1; } });',
-        '  Promise.reject(eo);',
-        '} catch (e) {}',
-        'var samples = [];',
-        'for (var i = 0; i < 3; i += 1) {',
-        '  var t0 = performance.now();',
-        '  samples.push(Number((performance.now() - t0).toFixed(3)));',
-        '}',
-        // 延迟 200ms 再回传，给 unhandledrejection 的 exceptionThrown 序列化留出触发时间
         'setTimeout(function () {',
         '  postMessage({',
         '    supported: true,',
         '    consoleGetterHit: hits.getter,',
         '    errorStackGetterHit: hits.stackGetter,',
-        '    exceptionGetterHit: excHits,',
-        '    debuggerMaxMs: Math.max.apply(Math, samples),',
         '    webdriver: ("webdriver" in navigator) ? navigator.webdriver : "property-absent",',
         '    userAgent: navigator.userAgent,',
         '    hardwareConcurrency: navigator.hardwareConcurrency,',
@@ -1241,16 +1309,16 @@
     }, Promise.resolve({ supported: false }));
   }
 
-  // 异常序列化旁路探针（exceptionThrown 路径）。
-  // 原理：commit 3e0d8f90 只在 V8RuntimeAgentImpl::messageAdded(console 路径) 加了 guard，
-  //       未 guard V8InspectorImpl::exceptionThrown。未捕获异常/unhandled rejection 的
-  //       exceptionDetails 仍会被 CDP 客户端序列化预览，从而触发对象 getter。
+  // 异常序列化诊断探针。默认不运行，只允许通过页面暴露的诊断 API 手动触发。
+  // 异常序列化探针。页面加载后自动执行一次，也保留诊断 API 供人工复测。
+  // V8 commit 3e0d8f90 在 messageAdded() 的消息类型判断前返回，按当前源码会同时
+  // 抑制 consoleAPICalled、exceptionThrown 与 exceptionRevoked；本探针用于专项回归，
+  // 不再将“console 静默但 exception 泄漏”视为该补丁的固有特征。
   // 误报控制：
   //   1) 用非标准属性名 __cdp_exc_trap__ 挂 getter —— 页面/Chrome 的标准 error handler 只读
   //      message/stack 等字段，不会枚举该属性；只有 inspector 生成 RemoteObject preview 时才读。
   //   2) 自己注册的 handler 里 preventDefault 抑制控制台噪音，且绝不访问对象属性，避免自触发。
-  // 基线：无 CDP -> hit=0；真人开 DevTools 或普通 CDP attach -> hit>0；
-  //       x5use 伪装(console 掐、exception 未掐) -> hit>0（这正是不对称签名的来源）。
+  // 基线：无 Runtime 消费者或抑制生效 -> hit=0；未抑制的 Inspector 消费者可能 hit>0。
   function runExceptionSerializationProbe() {
     return new Promise(function (resolve) {
       var hit = 0;
@@ -1282,13 +1350,12 @@
       setTimeout(function () {
         window.removeEventListener("unhandledrejection", onRej);
         window.removeEventListener("error", onErr, true);
-        antiFp.exceptionGetterHit = hit;
-        antiFp.exceptionProbeAt = Math.round(performance.now() - startedAt);
         resolve({
           enabled: true,
           exceptionGetterHit: hit,
           sources: sources.slice(0, 4),
-          note: "hit>0：未捕获异常的 exceptionDetails 被 inspector/CDP 序列化预览（exceptionThrown 路径，未被 commit 9eef07f0/3e0d8f90 抑制）。console 静默但此处命中 => Runtime inspector 伪装的不对称签名。"
+          runAt: Math.round(performance.now() - startedAt),
+          note: "专项诊断：hit>0 表示异常对象被某个 Inspector/CDP 消费路径物化；不能据此区分 Agent 与用户 DevTools。"
         });
       }, 250);
     });
@@ -1315,46 +1382,6 @@
         sampleCount: antiFp.webdriverSamples.length
       };
     }, null);
-  }
-
-  function probeDebugPort(port) {
-    var urls = [
-      "http://127.0.0.1:" + port + "/json/version",
-      "http://localhost:" + port + "/json/version"
-    ];
-    var timeoutMs = 900;
-    var attempts = urls.map(function (url) {
-      return new Promise(function (resolve) {
-        var settled = false;
-        var timer = setTimeout(function () {
-          if (!settled) { settled = true; resolve({ url: url, status: "timeout" }); }
-        }, timeoutMs);
-        fetch(url, { mode: "no-cors", cache: "no-store" }).then(function () {
-          if (!settled) { settled = true; clearTimeout(timer); resolve({ url: url, status: "reachable" }); }
-        }).catch(function (error) {
-          if (!settled) {
-            settled = true;
-            clearTimeout(timer);
-            resolve({ url: url, status: "blocked-or-closed", error: error && error.name ? error.name : "fetch-error" });
-          }
-        });
-      });
-    });
-    return Promise.all(attempts).then(function (results) {
-      return { port: port, reachable: results.some(function (r) { return r.status === "reachable"; }), results: results };
-    });
-  }
-
-  function runDebugPortProbe() {
-    return Promise.all([9222, 9223].map(probeDebugPort)).then(function (ports) {
-      return {
-        checkedPorts: ports,
-        reachablePorts: ports.filter(function (p) { return p.reachable; }).map(function (p) { return p.port; }),
-        note: "Only common local debug ports are checked. Browser policy / file origin / private-network rules can affect this signal."
-      };
-    }).catch(function (error) {
-      return { checkedPorts: [], reachablePorts: [], error: error && error.message ? error.message : String(error) };
-    });
   }
 
   /* ================================================================
@@ -1683,51 +1710,19 @@
       addFinding(findings, "CDP/Inspector", "Error 对象内省探针命中",
         "自动化端或调试端读取了页面暴露的新 Error 对象，导致 stack 被物化。", 18, "warn");
     }
-    if (report.debuggerTimingProbe && report.debuggerTimingProbe.maxMs > 120) {
-      addFinding(findings, "CDP/Inspector", "debugger 语句出现明显暂停",
-        "max " + report.debuggerTimingProbe.maxMs + "ms，可能存在已启用 Debugger domain 的控制端。", 12, "warn");
+    var exceptionProbe = report.exceptionSerializationProbe;
+    if (exceptionProbe && exceptionProbe.enabled && exceptionProbe.exceptionGetterHit > 0) {
+      addFinding(findings, "CDP/Inspector", "异常序列化探针命中",
+        "未捕获异常或 Promise rejection 携带的探针属性被 Inspector/CDP 消费者读取。", 18, "warn");
     }
     if (report.errorStackProbe && report.errorStackProbe.automationHints.length) {
       addFinding(findings, "CDP/Inspector", "Error.stack 出现自动化相关帧",
         report.errorStackProbe.automationHints.join(" | "), 15, "warn");
     }
-    if (report.debugPortProbe && report.debugPortProbe.reachablePorts.length) {
-      addFinding(findings, "CDP/Inspector", "发现常见本地 debug 端口可达",
-        "可达端口: " + report.debugPortProbe.reachablePorts.join(", ") + "，可能开启了 remote debugging。", 18, "warn");
-    }
-
-    /* ---- E2. 异常序列化旁路 + console/exception 不对称（针对内核 Runtime inspector 伪装） ---- */
-    // console 路径是否命中（会被 commit 3e0d8f90 的 messageAdded return 掐掉）
-    var consolePathHit = cdp.consoleGetterHit > 0 || cdp.errorStackGetterHit > 0 ||
-      cdp.toJsonHit > 0 ||
-      (report.cdpStackCheckProbe && report.cdpStackCheckProbe.detected);
-    // 异常路径是否命中（commit 未覆盖 exceptionThrown，可穿透伪装）
-    var excPathHit = report.exceptionSerializationProbe &&
-      report.exceptionSerializationProbe.enabled &&
-      report.exceptionSerializationProbe.exceptionGetterHit > 0;
-
-    if (!consolePathHit && excPathHit) {
-      // 不对称：console 静默但 exception 泄漏 —— 内核 Runtime inspector 伪装的独有签名
-      addFinding(findings, "CDP/Inspector",
-        "console 路径静默但 exception 路径泄漏（inspector 抑制不对称）",
-        "consoleAPICalled/StackCheck 探针无命中，但未捕获异常的 exceptionDetails 仍触发序列化预览" +
-        "（exceptionGetterHit=" + report.exceptionSerializationProbe.exceptionGetterHit + "）。" +
-        "这正是 messageAdded 被抑制、exceptionThrown 未被抑制的特征，是内核 Runtime inspector " +
-        "伪装（commit 9eef07f0 / 3e0d8f90）的独有签名。", 35, "danger");
-    } else if (consolePathHit && excPathHit) {
-      addFinding(findings, "CDP/Inspector", "console 与 exception 路径均触发序列化",
-        "存在未做针对性抑制的 inspector/CDP 消费者（普通 CDP attach 或真人开 DevTools）。", 20, "warn");
-    } else if (excPathHit) {
-      addFinding(findings, "CDP/Inspector", "异常序列化探针命中",
-        "未捕获异常的 exceptionDetails 被 inspector/CDP 序列化预览，存在 Runtime inspector 消费者。", 18, "warn");
-    }
 
     /* ---- F. 运行时一致性 ---- */
     if (/Chrome/i.test(nav.userAgent) && !env.chromeObject.present) {
       addFinding(findings, "一致性", "Chrome UA 但缺少 window.chrome", "UA 与 Chrome 专属对象不一致。", 8, "warn");
-    }
-    if (/Chrome/i.test(nav.userAgent) && env.chromeObject.present && !env.chromeObject.hasRuntime) {
-      addFinding(findings, "一致性", "window.chrome 缺少 runtime", "真实 Chrome 页面环境通常暴露 chrome.runtime。", 5, "info");
     }
     if (nav.userAgentData && nav.userAgentData.platform && nav.platform) {
       var chp = nav.userAgentData.platform.toLowerCase();
@@ -1741,8 +1736,12 @@
       var uaMatch = nav.userAgent.match(/Chrome\/([\d.]+)/);
       var fv = report.highEntropyUserAgentData.fullVersionList;
       var chromeFv = fv.filter(function (b) { return /chrom/i.test(b.brand); })[0];
-      if (uaMatch && chromeFv && uaMatch[1] !== chromeFv.version) {
-        addFinding(findings, "一致性", "UA 版本号与 UA-CH fullVersionList 不一致",
+      var uaMajor = uaMatch ? uaMatch[1].split(".")[0] : null;
+      var chMajor = chromeFv && chromeFv.version ? chromeFv.version.split(".")[0] : null;
+      // Chrome UA Reduction 会把普通 UA 缩减为 major.0.0.0，而 UA-CH 仍可返回
+      // 完整版本。这里只比较主版本，避免把标准缩减行为误判为伪装不一致。
+      if (uaMajor && chMajor && uaMajor !== chMajor) {
+        addFinding(findings, "一致性", "UA 与 UA-CH 主版本号不一致",
           "UA: " + uaMatch[1] + " vs UA-CH: " + chromeFv.version, 10, "warn");
       }
     }
@@ -1809,10 +1808,7 @@
       return cdp.consoleGetterHit > 0 || cdp.errorStackGetterHit > 0 || cdp.toJsonHit > 0 ||
         (report.cdpStackCheckProbe && report.cdpStackCheckProbe.detected) ||
         (report.cdpObjectInspectionProbe && report.cdpObjectInspectionProbe.hits > 0) ||
-        (report.debuggerTimingProbe && report.debuggerTimingProbe.maxMs > 120) ||
-        (report.debugPortProbe && report.debugPortProbe.reachablePorts.length > 0) ||
-        (report.exceptionSerializationProbe && report.exceptionSerializationProbe.enabled &&
-          report.exceptionSerializationProbe.exceptionGetterHit > 0) ||
+        (report.exceptionSerializationProbe && report.exceptionSerializationProbe.exceptionGetterHit > 0) ||
         strongTraces.length > 0;
     }
 
@@ -1848,19 +1844,9 @@
           " 次。9eef07f0 声称覆盖每个 Worker isolate，此处命中说明抑制在 Worker 上未生效。",
           10, "warn");
       }
-      if (wp.debuggerMaxMs > 120) {
-        addFinding(findings, "内核对抗回归", "Worker 内 debugger 语句出现明显暂停",
-          "Worker debugger 最大耗时 " + wp.debuggerMaxMs + "ms，存在已启用 Debugger 的控制端。", 10, "warn");
-      }
-      if (wp.exceptionGetterHit > 0) {
-        addFinding(findings, "内核对抗回归", "Worker isolate 内异常序列化探针被触发",
-          "Worker 内未捕获异常的 exceptionDetails 触发 getter " + wp.exceptionGetterHit +
-          " 次。commit 只 guard 了 messageAdded(console)，exceptionThrown 路径在 Worker 上同样未被抑制。",
-          10, "warn");
-      }
-      if (wp.consoleGetterHit === 0 && wp.errorStackGetterHit === 0 && wp.debuggerMaxMs <= 120) {
-        addFinding(findings, "内核对抗回归", "Worker isolate 探针无命中",
-          "Worker 内 console getter / debugger 时序均无异常，inspector 抑制（若开启）在 Worker 上生效。", 0, "ok");
+      if (wp.consoleGetterHit === 0 && wp.errorStackGetterHit === 0) {
+        addFinding(findings, "内核对抗回归", "Worker isolate 未发现 Console 序列化命中",
+          "本轮 Worker Console getter 未被触发；这只能说明未观察到泄漏，不能单独证明抑制开关已开启。", 0, "ok");
       }
       if (wp.webdriver !== "property-absent" && wp.webdriver !== navigator.webdriver) {
         addFinding(findings, "内核对抗回归", "Worker 与主页面 webdriver 取值不一致",
@@ -1869,6 +1855,20 @@
     } else if (wp && wp.timeout) {
       addFinding(findings, "内核对抗回归", "Worker 探针超时",
         "Worker 内探针未在 4s 内返回，可能被 debugger 暂停或环境异常。", 4, "info");
+    }
+
+    var bp = report.bindingPersistenceProbe;
+    if (bp && bp.enabled) {
+      if (bp.status === "suppressed") {
+        addFinding(findings, "内核对抗回归", "Runtime binding 新 Context 恢复已被抑制",
+          bp.note, 0, "ok");
+      } else if (bp.status === "propagated") {
+        addFinding(findings, "内核对抗回归", "Runtime binding 仍传播到新 Context",
+          bp.note, 0, "warn");
+      } else {
+        addFinding(findings, "内核对抗回归", "Runtime binding 回归探针未形成有效结论",
+          bp.note || bp.status, 0, "info");
+      }
     }
 
     /* ---- 兜底 ---- */
@@ -2003,12 +2003,10 @@
     return Promise.all([
       getHighEntropyValues(),
       getAudioHash(),
-      runDebugPortProbe(),
       getPermissionsConsistency(),
       getMediaDevicesCount(),
       runWorkerProbe(),
-      runCdpStackCheckProbe(),
-      runExceptionSerializationProbe()
+      runCdpStackCheckProbe()
     ]).then(function (values) {
       var report = {
         generatedAt: new Date().toISOString(),
@@ -2018,7 +2016,7 @@
         environment: getEnvironmentData(),
         automationGlobals: getAutomationGlobals(),
         cdpSerializationProbe: runCdpSerializationProbe(),
-        cdpStackCheckProbe: values[6],
+        cdpStackCheckProbe: values[5],
         cdpObjectInspectionProbe: {
           exposedApi: "window.__automationDetectLab.getFreshErrorProbe()",
           readHitsApi: "window.__automationDetectLab.readObjectInspectionHits()",
@@ -2027,15 +2025,15 @@
         },
         debuggerTimingProbe: runDebuggerTimingProbe(),
         errorStackProbe: getErrorStackProbe(),
-        debugPortProbe: values[2],
-        permissionsConsistency: values[3],
-        mediaDevices: values[4],
+        permissionsConsistency: values[2],
+        mediaDevices: values[3],
         speechVoices: getSpeechVoices(),
         iframeConsistency: getIframeConsistency(),
         nativeIntegrity: getNativeIntegrity(),
         webdriverSpoofProbe: getWebdriverSpoofProbe(),
-        exceptionSerializationProbe: values[7],
-        workerProbe: values[5],
+        bindingPersistenceProbe: antiFp.bindingPersistenceProbe,
+        exceptionSerializationProbe: antiFp.exceptionProbeResult,
+        workerProbe: values[4],
         graphics: {
           canvasHash: getCanvasHash(),
           webgl: getWebglInfo(),
@@ -2078,8 +2076,21 @@
     cdpProbe.toJsonHit = 0;
     antiFp.webdriverSamples = [];
     antiFp.webdriverFlip = false;
-    antiFp.exceptionGetterHit = 0;
-    antiFp.exceptionToStringHit = 0;
+    antiFp.bindingPersistenceProbe = {
+      enabled: false,
+      status: "not-run",
+      note: "需由控制端先调用 Runtime.addBinding，再运行页面暴露的 binding 回归 API。"
+    };
+    antiFp.exceptionProbeResult = {
+      enabled: false,
+      exceptionGetterHit: 0,
+      note: "默认关闭；仅通过 window.__automationDetectLab.runExceptionSerializationProbe() 手动运行。"
+      note: "等待自动执行异常序列化探针。"
+    };
+    runExceptionSerializationProbe().then(function (result) {
+      antiFp.exceptionProbeResult = result;
+      scheduleDetection();
+    });
     runDetection();
   }
 
@@ -2117,6 +2128,10 @@
   document.getElementById("resetBehaviorBtn").addEventListener("click", resetBehavior);
 
   setupCdpObjectInspectionProbe();
+  runExceptionSerializationProbe().then(function (result) {
+    antiFp.exceptionProbeResult = result;
+    scheduleDetection();
+  });
   runDetection();
   setInterval(runDetection, 5000);
 
