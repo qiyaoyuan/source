@@ -64,9 +64,10 @@
             <tr><td><code>mouse_op(wheel)</code></td><td>滚动容器</td><td>wheel 事件坐标/合成特征</td></tr>
             <tr><td><code>drag_drop</code></td><td>拖拽区</td><td>dragstart/drop isTrusted=false、合成 DataTransfer</td></tr>
             <tr><td><code>eval_content_js</code></td><td>整页</td><td>Error.stack 帧、console 序列化 getter 探针</td></tr>
+            <tr><td><code>Runtime.addBinding</code> 回归</td><td>主页面 + 新 iframe</td><td>控制端注入 sentinel 后调用 <code>runBindingPersistenceProbe()</code>，验证新 Context 是否恢复 binding</td></tr>
             <tr><td><code>screenshot(fullPage)</code></td><td>整页</td><td>viewport 突变（Emulation.setDeviceMetricsOverride）、蒙层 visibility 切换</td></tr>
             <tr><td>内核 commit <code>f98b861a</code><br>webdriver 伪装</td><td>自动回归</td><td>webdriver 跨 realm（主页面/iframe/Worker）一致性、运行期翻转监控、"webdriver=false 但 CDP 痕迹可检出"的 gap 判定</td></tr>
-            <tr><td>内核 commit <code>9eef07f0</code><br>V8 Runtime inspector 抑制</td><td>自动回归</td><td>主世界 + Worker isolate 双路 console getter 探针、异常序列化旁路（Runtime.exceptionThrown preview）、Worker 内 debugger 时序</td></tr>
+            <tr><td>内核 commit <code>9eef07f0 / 3e0d8f90</code><br>V8 Runtime inspector 抑制</td><td>自动回归</td><td>主世界 + Worker isolate Console getter、CDP Stack Check、一次性异常序列化探针</td></tr>
           </tbody>
         </table>
       </details>
@@ -75,7 +76,7 @@
     <section class="trace" aria-label="AgentRuntime 痕迹监视">
       <div class="report-head">
         <h2>AgentRuntime 痕迹监视（MutationObserver 实时捕获）</h2>
-        <p>监听 <code>data-hi</code>、<code>data-__cdp-locate</code>、<code>data-x5-overlay</code> 属性注入与 <code>#playwright-highlight-container</code>、<code>#x5-overlay-*</code> 节点创建。命中即 AgentRuntime 石锤信号，即使随后被移除也会留痕。</p>
+        <p>监听 <code>data-hi</code>、<code>data-__cdp-locate</code>、<code>data-x5-overlay</code> 属性注入与 <code>#playwright-highlight-container</code>、<code>#x5-overlay-*</code> 节点创建。专有命名节点为较强框架痕迹，通用短属性仅作弱线索；即使随后移除也会留痕。</p>
       </div>
       <div id="traceLog" class="trace-log"><p class="empty">暂无异动记录。让 Agent 执行 get_state / click_element 后观察此处。</p></div>
     </section>
