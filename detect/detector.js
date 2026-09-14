@@ -136,7 +136,6 @@
     exceptionProbeResult: {
       enabled: false,
       exceptionGetterHit: 0,
-      note: "默认关闭；仅通过 window.__automationDetectLab.runExceptionSerializationProbe() 手动运行。"
       note: "等待页面加载后执行一次异常序列化探针。"
     },
     worker: null
@@ -964,8 +963,8 @@
       "    };",
       "    var directError = new Error('cdp-stack-check-" + label + "');",
       "    var nestedError = new Error('cdp-nested-stack-check-" + label + "');",
-      "    console.log(directError);",
-      "    console.log({ nested: nestedError });",
+      "    console.debug(directError);",
+      "    console.debug({ nested: nestedError });",
       "    setTimeout(function () {",
       "      Error.prepareStackTrace = originalPrepareStackTrace;",
       "      resolve({",
@@ -1119,7 +1118,7 @@
         lastHitAt: cdpProbe.lastHitAt,
         contexts: contexts,
         mappedFrom: ["Fingerprint Scan", "DeviceAndBrowserInfo", "bot-signal", "Brotector"],
-        mechanism: "Error.prepareStackTrace + console.log(Error) stack materialization side channel",
+        mechanism: "Error.prepareStackTrace + console.debug(Error) stack materialization side channel",
         note: "间歇命中属正常（CDP 按需消费）。会话内命中过一次即 latch 为 detected。DevTools 打开也会触发同一信号。"
       };
     });
@@ -1309,7 +1308,6 @@
     }, Promise.resolve({ supported: false }));
   }
 
-  // 异常序列化诊断探针。默认不运行，只允许通过页面暴露的诊断 API 手动触发。
   // 异常序列化探针。页面加载后自动执行一次，也保留诊断 API 供人工复测。
   // V8 commit 3e0d8f90 在 messageAdded() 的消息类型判断前返回，按当前源码会同时
   // 抑制 consoleAPICalled、exceptionThrown 与 exceptionRevoked；本探针用于专项回归，
@@ -1337,25 +1335,22 @@
         });
         return o;
       }
-      function onRej(e) { try { e.preventDefault(); } catch (x) { /* ignore */ } }
       function onErr(e) { try { e.preventDefault(); } catch (x) { /* ignore */ } return true; }
-      window.addEventListener("unhandledrejection", onRej);
       window.addEventListener("error", onErr, true);
 
-      // 路径1：真·未捕获异常（脱离当前调用栈）
+      // 脱离当前调用栈制造异常，由 error handler 阻止页面默认报错展示。
+      // 不使用 Promise.reject：即使 preventDefault，DevTools 仍可能显示
+      // "Uncaught (in promise)"，会污染测试页面的 Console。
       setTimeout(function () { throw makeProbe("throw"); }, 0);
-      // 路径2：unhandled promise rejection
-      try { Promise.reject(makeProbe("reject")); } catch (e) { /* ignore */ }
 
       setTimeout(function () {
-        window.removeEventListener("unhandledrejection", onRej);
         window.removeEventListener("error", onErr, true);
         resolve({
           enabled: true,
           exceptionGetterHit: hit,
           sources: sources.slice(0, 4),
           runAt: Math.round(performance.now() - startedAt),
-          note: "专项诊断：hit>0 表示异常对象被某个 Inspector/CDP 消费路径物化；不能据此区分 Agent 与用户 DevTools。"
+          note: "hit>0 表示异常对象被某个 Inspector/CDP 消费路径物化；不区分具体 CDP 客户端。"
         });
       }, 250);
     });
@@ -2084,7 +2079,6 @@
     antiFp.exceptionProbeResult = {
       enabled: false,
       exceptionGetterHit: 0,
-      note: "默认关闭；仅通过 window.__automationDetectLab.runExceptionSerializationProbe() 手动运行。"
       note: "等待自动执行异常序列化探针。"
     };
     runExceptionSerializationProbe().then(function (result) {
