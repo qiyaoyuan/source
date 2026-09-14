@@ -67,7 +67,7 @@
             <tr><td><code>Runtime.addBinding</code> 回归</td><td>主页面 + 新 iframe</td><td>控制端注入 sentinel 后调用 <code>runBindingPersistenceProbe()</code>，验证新 Context 是否恢复 binding</td></tr>
             <tr><td><code>screenshot(fullPage)</code></td><td>整页</td><td>viewport 突变（Emulation.setDeviceMetricsOverride）、蒙层 visibility 切换</td></tr>
             <tr><td>内核 commit <code>f98b861a</code><br>webdriver 伪装</td><td>自动回归</td><td>webdriver 跨 realm（主页面/iframe/Worker）一致性、运行期翻转监控、"webdriver=false 但 CDP 痕迹可检出"的 gap 判定</td></tr>
-            <tr><td>内核 commit <code>9eef07f0 / 3e0d8f90</code><br>V8 Runtime inspector 抑制</td><td>自动回归</td><td>主世界 + Worker isolate Console getter、CDP Stack Check、一次性异常序列化探针</td></tr>
+            <tr><td>内核 commit <code>9eef07f0 / 3e0d8f90</code><br>V8 Runtime inspector 抑制</td><td>回归观察</td><td>主世界 + Worker isolate Console getter、CDP Stack Check；异常序列化仅手动执行，会产生测试异常</td></tr>
           </tbody>
         </table>
       </details>
@@ -153,10 +153,17 @@
 
     <section class="summary-grid" id="summaryGrid" aria-label="检测摘要"></section>
 
+    <section class="report" aria-label="Inspector 探针状态">
+      <div class="report-head">
+        <h2>Inspector 探针状态</h2>
+        <p id="inspectorStatus" role="status">正在采样…</p>
+      </div>
+    </section>
+
     <section class="report">
       <div class="report-head">
         <h2>检测详情</h2>
-        <p>强信号会显著提高风险分，弱信号只作为组合判断。单项命中不等同于最终结论。</p>
+        <p>Stack Check 命中表示页面会话内高置信度检测到 Runtime/Inspector 消费并计入高权重风险分；其他未校准读取与 DOM 命名特征不计分。未命中不能排除 CDP。</p>
       </div>
       <div id="findings" class="findings"></div>
     </section>
