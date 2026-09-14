@@ -102,6 +102,7 @@
 
   /** CDP 探针累计状态 */
   var cdpProbe = {
+    reads: [],
     consoleGetterHit: 0,
     errorStackGetterHit: 0,
     toJsonHit: 0,
@@ -117,6 +118,9 @@
     firstHitAt: 0,                // 会话内首次命中时刻（ms）
     lastHitAt: 0                  // 会话内最近命中时刻（ms）
   };
+  var detectionGeneration = 0;
+  var detectionInFlight = null;
+  var mainStackBusy = false;
 
   function markCdpHit() {
     var now = Math.round(performance.now() - startedAt);
@@ -136,7 +140,7 @@
     exceptionProbeResult: {
       enabled: false,
       exceptionGetterHit: 0,
-      note: "等待页面加载后执行一次异常序列化探针。"
+      note: "默认不执行；手动诊断会产生未捕获异常，可能在 DevTools 显示红色报错。"
     },
     worker: null
   };
@@ -624,7 +628,7 @@
       hardwareConcurrency: navigator.hardwareConcurrency,
       deviceMemory: navigator.deviceMemory,
       maxTouchPoints: navigator.maxTouchPoints,
-      cookieEnabled: navigator.cookieEnabled,
+      cookieEnabled: location.protocol === "file:" ? null : navigator.cookieEnabled,
       pluginsLength: navigator.plugins ? navigator.plugins.length : null,
       mimeTypesLength: navigator.mimeTypes ? navigator.mimeTypes.length : null,
       pdfViewerEnabled: navigator.pdfViewerEnabled,
@@ -893,17 +897,30 @@
 
       // 记录采样前基线，用于判断"本次采样"是否命中（区别于会话累计）
       var beforeHit = cdpProbe.consoleGetterHit + cdpProbe.errorStackGetterHit + cdpProbe.toJsonHit;
+      var generation = detectionGeneration;
+      var sampleId = ++cdpProbe.serializationSamples;
+      var createdAt = Math.round(performance.now() - startedAt);
+      var counted = false;
+      function recordRead(field) {
+        if (generation !== detectionGeneration) { return; }
+        cdpProbe[field] += 1;
+        if (!counted) { cdpProbe.serializationHitSamples += 1; counted = true; }
+        markCdpHit();
+        pushLimited(cdpProbe.reads, { sampleId: sampleId, kind: field,
+          createdAt: createdAt, readAt: cdpProbe.lastHitAt }, 100);
+        scheduleDetection();
+      }
 
       var probeObject = {};
       Object.defineProperty(probeObject, "cdpGetterProbe", {
         get: function () {
-          cdpProbe.consoleGetterHit += 1;
+          recordRead("consoleGetterHit");
           return "getter-read";
         }
       });
       Object.defineProperty(probeObject, "toJSON", {
         value: function () {
-          cdpProbe.toJsonHit += 1;
+          recordRead("toJsonHit");
           return {};
         }
       });
@@ -911,7 +928,7 @@
       var error = new Error("cdp-stack-probe");
       Object.defineProperty(error, "stack", {
         get: function () {
-          cdpProbe.errorStackGetterHit += 1;
+          recordRead("errorStackGetterHit");
           return "stack-read";
         }
       });
@@ -919,13 +936,8 @@
       console.debug("automation-detection-cdp-probe", probeObject, error);
 
       // getter 序列化通常在 console 调用栈内同步触发（若 CDP 消费者活跃）。
-      cdpProbe.serializationSamples += 1;
       var afterHit = cdpProbe.consoleGetterHit + cdpProbe.errorStackGetterHit + cdpProbe.toJsonHit;
       var hitThisSample = afterHit > beforeHit;
-      if (hitThisSample) {
-        cdpProbe.serializationHitSamples += 1;
-        markCdpHit();
-      }
 
       return {
         consoleGetterHit: cdpProbe.consoleGetterHit,
@@ -938,7 +950,8 @@
         detectedEver: (cdpProbe.consoleGetterHit + cdpProbe.errorStackGetterHit + cdpProbe.toJsonHit) > 0,
         firstHitAt: cdpProbe.firstHitAt,
         lastHitAt: cdpProbe.lastHitAt,
-        note: "间歇性命中属正常：CDP 客户端按需 enable Runtime domain，getter 仅在其请求 console 对象预览的窗口内被触发。会话内命中过一次即确诊存在消费者。"
+        reads: cdpProbe.reads.slice(),
+        note: "记录探针属性实际读取；读取来源未知。V8 可跳过自定义 getter，未命中不能排除 CDP。"
       };
     }, {
       consoleGetterHit: cdpProbe.consoleGetterHit,
@@ -954,24 +967,31 @@
       "  return new Promise(function (resolve) {",
       "    var hit = 0;",
       "    var originalPrepareStackTrace = Error.prepareStackTrace;",
-      "    Error.prepareStackTrace = function (error, structuredStackTrace) {",
-      "      hit += 1;",
+      "    var originalDescriptor = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');",
+      "    var targets = new WeakSet();",
+      "    var hook = function (error, structuredStackTrace) {",
+      "      if (targets.has(error)) { hit += 1; }",
       "      if (typeof originalPrepareStackTrace === 'function') {",
       "        return originalPrepareStackTrace.call(this, error, structuredStackTrace);",
       "      }",
       "      return error && error.name ? error.name + ': ' + (error.message || '') : 'Error';",
       "    };",
+      "    Error.prepareStackTrace = hook;",
       "    var directError = new Error('cdp-stack-check-" + label + "');",
       "    var nestedError = new Error('cdp-nested-stack-check-" + label + "');",
+      "    targets.add(directError); targets.add(nestedError);",
       "    console.debug(directError);",
       "    console.debug({ nested: nestedError });",
       "    setTimeout(function () {",
-      "      Error.prepareStackTrace = originalPrepareStackTrace;",
+      "      if (Error.prepareStackTrace === hook) {",
+      "        if (originalDescriptor) Object.defineProperty(Error, 'prepareStackTrace', originalDescriptor);",
+      "        else delete Error.prepareStackTrace;",
+      "      }",
       "      resolve({",
       "        context: '" + label + "',",
       "        hit: hit,",
       "        detected: hit > 0,",
-      "        note: 'true means console Error stack was materialized while a console/Runtime consumer was active'",
+      "        note: 'Probe Error stack read observed; reader identity and CDP connection state are unknown'",
       "      });",
       "    }, 120);",
       "  });",
@@ -980,6 +1000,8 @@
   }
 
   function runMainStackMaterializationProbe() {
+    if (mainStackBusy) { return Promise.resolve({ context: 'main', skipped: true, detected: false }); }
+    mainStackBusy = true;
     return safe("mainStackMaterializationProbe", function () {
       return window.eval(buildStackMaterializationProbeSource("main"));
     }, Promise.resolve({
@@ -987,7 +1009,7 @@
       hit: 0,
       detected: false,
       error: "main probe failed"
-    }));
+    })).finally(function () { mainStackBusy = false; });
   }
 
   function runIframeStackMaterializationProbe() {
@@ -1088,12 +1110,14 @@
   }
 
   function runCdpStackCheckProbe() {
+    var generation = detectionGeneration;
     cdpProbe.stackCheckRuns += 1;
     return Promise.all([
       runMainStackMaterializationProbe(),
       runIframeStackMaterializationProbe(),
       runWorkerStackMaterializationProbe()
     ]).then(function (contexts) {
+      if (generation !== detectionGeneration) { return { stale: true, detected: false }; }
       var detectedNow = contexts.some(function (item) { return item.detected; });
       cdpProbe.stackCheckSamples += 1;
       if (detectedNow) {
@@ -1119,7 +1143,7 @@
         contexts: contexts,
         mappedFrom: ["Fingerprint Scan", "DeviceAndBrowserInfo", "bot-signal", "Brotector"],
         mechanism: "Error.prepareStackTrace + console.debug(Error) stack materialization side channel",
-        note: "间歇命中属正常（CDP 按需消费）。会话内命中过一次即 latch 为 detected。DevTools 打开也会触发同一信号。"
+        note: "历史记录只表示探针 Error 的栈曾被读取，不证明 CDP 当前连接或具体读取来源。"
       };
     });
   }
@@ -1128,25 +1152,40 @@
     window.__automationDetectLab = window.__automationDetectLab || {};
     window.__automationDetectLab.objectInspectionHits = 0;
     window.__automationDetectLab.getFreshErrorProbe = function () {
+      if (mainStackBusy) { throw new Error('Stack probe busy; retry after current sample'); }
+      mainStackBusy = true;
+      var generation = detectionGeneration;
+      var descriptor = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
       var originalPrepareStackTrace = Error.prepareStackTrace;
-      Error.prepareStackTrace = function (error, structuredStackTrace) {
-        window.__automationDetectLab.objectInspectionHits += 1;
+      var target;
+      var hook = function (error, structuredStackTrace) {
+        if (error === target && generation === detectionGeneration) {
+          window.__automationDetectLab.objectInspectionHits += 1;
+          scheduleDetection();
+        }
         if (typeof originalPrepareStackTrace === "function") {
           return originalPrepareStackTrace.call(this, error, structuredStackTrace);
         }
         return error && error.name ? error.name + ": " + (error.message || "") : "Error";
       };
-      var error = new Error("cdp-object-inspection-probe");
+      Error.prepareStackTrace = hook;
+      target = new Error("cdp-object-inspection-probe");
       setTimeout(function () {
-        Error.prepareStackTrace = originalPrepareStackTrace;
+        if (Error.prepareStackTrace === hook) {
+          if (descriptor) Object.defineProperty(Error, 'prepareStackTrace', descriptor);
+          else delete Error.prepareStackTrace;
+        }
+        mainStackBusy = false;
       }, 1000);
-      return error;
+      return target;
     };
     window.__automationDetectLab.readObjectInspectionHits = function () {
       return window.__automationDetectLab.objectInspectionHits;
     };
     window.__automationDetectLab.runBindingPersistenceProbe = function (bindingName) {
+      var generation = detectionGeneration;
       return runBindingPersistenceProbe(bindingName).then(function (result) {
+        if (generation !== detectionGeneration) { return result; }
         antiFp.bindingPersistenceProbe = result;
         scheduleDetection();
         return result;
@@ -1216,13 +1255,13 @@
         iframe.remove();
         resolve({
           enabled: true,
-          status: iframePresent === false ? "suppressed" :
+          status: iframePresent === false ? "not-propagated" :
             (iframePresent === true ? "propagated" : "inconclusive"),
           bindingName: name,
           mainPresent: true,
           iframePresent: iframePresent,
           note: iframePresent === false ?
-            "主 Context 已注入，但新 iframe 未恢复 binding：addBindings() 抑制行为已观察到。" :
+            "新 iframe 未发现同名属性；需排除 binding 的 Context 限定、注册时序和非 CDP 同名属性，不能单独确认补丁生效。" :
             (iframePresent === true ?
               "新 iframe 也出现 binding：Runtime.addBinding 的新 Context 传播未被抑制。" :
               "无法读取新 iframe Context，结果不确定。")
@@ -1308,16 +1347,14 @@
     }, Promise.resolve({ supported: false }));
   }
 
-  // 异常序列化探针。页面加载后自动执行一次，也保留诊断 API 供人工复测。
+  // 仅手动执行：主动抛出的异常仍可能出现在 DevTools，不能承诺静默。
   // V8 commit 3e0d8f90 在 messageAdded() 的消息类型判断前返回，按当前源码会同时
   // 抑制 consoleAPICalled、exceptionThrown 与 exceptionRevoked；本探针用于专项回归，
   // 不再将“console 静默但 exception 泄漏”视为该补丁的固有特征。
-  // 误报控制：
-  //   1) 用非标准属性名 __cdp_exc_trap__ 挂 getter —— 页面/Chrome 的标准 error handler 只读
-  //      message/stack 等字段，不会枚举该属性；只有 inspector 生成 RemoteObject preview 时才读。
-  //   2) 自己注册的 handler 里 preventDefault 抑制控制台噪音，且绝不访问对象属性，避免自触发。
-  // 基线：无 Runtime 消费者或抑制生效 -> hit=0；未抑制的 Inspector 消费者可能 hit>0。
+  // 自定义 getter 不保证被 V8 Preview 调用。保留为实验观察，不作连接判定。
+  // error handler 仅处理本探针对象，不吞掉业务异常。
   function runExceptionSerializationProbe() {
+    var generation = detectionGeneration;
     return new Promise(function (resolve) {
       var hit = 0;
       var sources = [];
@@ -1326,6 +1363,7 @@
         Object.defineProperty(o, "__cdp_exc_trap__", {
           enumerable: true,
           get: function () {
+            if (generation !== detectionGeneration) { return 1; }
             hit += 1;
             try {
               sources.push((new Error("read-" + tag)).stack.split("\n").slice(1, 3).join(" | "));
@@ -1335,22 +1373,27 @@
         });
         return o;
       }
-      function onErr(e) { try { e.preventDefault(); } catch (x) { /* ignore */ } return true; }
+      var thrown = makeProbe("throw");
+      function onErr(e) {
+        if (e.error === thrown) { e.preventDefault(); }
+      }
       window.addEventListener("error", onErr, true);
 
-      // 脱离当前调用栈制造异常，由 error handler 阻止页面默认报错展示。
+      // 尝试取消本探针的默认错误处理；DevTools 仍可能显示该异常。
       // 不使用 Promise.reject：即使 preventDefault，DevTools 仍可能显示
       // "Uncaught (in promise)"，会污染测试页面的 Console。
-      setTimeout(function () { throw makeProbe("throw"); }, 0);
+      setTimeout(function () {
+        if (generation === detectionGeneration) { throw thrown; }
+      }, 0);
 
       setTimeout(function () {
         window.removeEventListener("error", onErr, true);
-        resolve({
+        resolve(generation !== detectionGeneration ? antiFp.exceptionProbeResult : {
           enabled: true,
           exceptionGetterHit: hit,
           sources: sources.slice(0, 4),
           runAt: Math.round(performance.now() - startedAt),
-          note: "hit>0 表示异常对象被某个 Inspector/CDP 消费路径物化；不区分具体 CDP 客户端。"
+          note: "实验项：仅表示异常对象属性被读取；V8 Preview 不保证调用自定义 getter，不参与风险评分。"
         });
       }, 250);
     });
@@ -1601,19 +1644,19 @@
       report.traces.forEach(function (t) { kinds[t.kind.split(":")[0]] = (kinds[t.kind.split(":")[0]] || 0) + 1; });
       var kindText = Object.keys(kinds).map(function (k) { return k + "×" + kinds[k]; }).join(", ");
       if (strongTraces.length) {
-        addFinding(findings, "AgentRuntime痕迹",
+        addFinding(findings, "框架命名特征",
           "检出专有命名注入节点（疑似 X5Use / 自动化高亮框架）",
           "命中: " + kindText + "。playwright-highlight-container / x5-overlay 这类专有命名节点，普通网站极少自发使用，" +
           "可提示页面上运行着该 overlay / 高亮框架。但这属于基于已知源码的白盒特征匹配：改名即失效，" +
-          "且只证明框架身份、不等于自动化本身，需结合事件保真度（isTrusted）/ CDP 信号综合判断。",
-          20, "warn");
+          "手工脚本也能注入同名节点，不能确认框架身份、自动化操作或 CDP 连接。",
+          0, "info");
       } else {
-        addFinding(findings, "AgentRuntime痕迹",
+        addFinding(findings, "框架命名特征",
           "检出已知框架属性标记（弱信号，可能误报）",
           "命中: " + kindText + "。data-hi / data-__cdp-locate 是通过已知 X5Use 源码盯的通用短属性，" +
           "普通网站或前端库也可能使用同名属性（如 hidden / highlight / index 缩写），单独出现不能表明自动化；" +
           "仅作为需要其它信号佐证的弱线索，不单独计入自动化判定。",
-          5, "info");
+          0, "info");
       }
     }
 
@@ -1689,8 +1732,7 @@
       addFinding(findings, "CDP/Inspector", "console 序列化探针被触发（会话内命中）",
         "getter×" + cdp.consoleGetterHit + " stackGetter×" + cdp.errorStackGetterHit + " toJSON×" + cdp.toJsonHit +
         "，采样命中 " + serRate + serWindow +
-        "。存在读取 console 对象预览的调试器/CDP 客户端。命中间歇（非必现）属正常——CDP 按需 enable " +
-        "Runtime domain，只在其请求对象预览的窗口内触发 getter；会话内命中一次即确诊。", 12, "warn");
+        "。探针属性被读取，可能来自 Inspector 或其他脚本；不能直接确认 CDP。未校准，不计风险分。", 0, "info");
     }
     if (report.cdpStackCheckProbe && report.cdpStackCheckProbe.detected) {
       var sc = report.cdpStackCheckProbe;
@@ -1698,21 +1740,22 @@
       var scNow = sc.detectedNow ? "本次仍命中" : "本次未命中（历史已 latch）";
       addFinding(findings, "CDP/Inspector", "CDP Stack Check 命中（会话内 latch）",
         "Error.prepareStackTrace 在 " + (sc.detectedContexts.join(", ") || "—") +
-        " 上下文被触发，console Error 栈被 Inspector/CDP 消费者物化。采样命中 " + scRate +
-        "，" + scNow + "。偶现即确诊：CDP 消费是间歇的，会话内命中过一次即锁定。", 28, "danger");
+        " 上下文的指定探针 Error 上被触发。采样命中 " + scRate +
+        "，" + scNow + "。已高置信度检测到本页面会话内存在 Runtime/Inspector 对 Console Error 的消费；" +
+        "可能来自 DevTools 或其他 CDP 客户端。", 50, "danger");
     }
     if (report.cdpObjectInspectionProbe && report.cdpObjectInspectionProbe.hits > 0) {
       addFinding(findings, "CDP/Inspector", "Error 对象内省探针命中",
-        "自动化端或调试端读取了页面暴露的新 Error 对象，导致 stack 被物化。", 18, "warn");
+        "返回的指定 Error 栈被读取；页面脚本也可触发，需结合控制端记录归因。", 0, "info");
     }
     var exceptionProbe = report.exceptionSerializationProbe;
     if (exceptionProbe && exceptionProbe.enabled && exceptionProbe.exceptionGetterHit > 0) {
       addFinding(findings, "CDP/Inspector", "异常序列化探针命中",
-        "未捕获异常或 Promise rejection 携带的探针属性被 Inspector/CDP 消费者读取。", 18, "warn");
+        "实验项：异常对象属性被读取，来源未知；不证明 Runtime 已启用。", 0, "info");
     }
     if (report.errorStackProbe && report.errorStackProbe.automationHints.length) {
       addFinding(findings, "CDP/Inspector", "Error.stack 出现自动化相关帧",
-        report.errorStackProbe.automationHints.join(" | "), 15, "warn");
+        report.errorStackProbe.automationHints.join(" | ") + "；字符串可由脚本命名产生，不证明 CDP。", 0, "info");
     }
 
     /* ---- F. 运行时一致性 ---- */
@@ -1804,22 +1847,22 @@
         (report.cdpStackCheckProbe && report.cdpStackCheckProbe.detected) ||
         (report.cdpObjectInspectionProbe && report.cdpObjectInspectionProbe.hits > 0) ||
         (report.exceptionSerializationProbe && report.exceptionSerializationProbe.exceptionGetterHit > 0) ||
-        strongTraces.length > 0;
+        (report.workerProbe && (report.workerProbe.consoleGetterHit > 0 || report.workerProbe.errorStackGetterHit > 0));
     }
 
     var wsp = report.webdriverSpoofProbe;
     if (wsp) {
       if (wsp.value === true) {
-        addFinding(findings, "内核对抗回归", "webdriver 伪装未生效",
-          "navigator.webdriver=true：--enable-automation 仍在强制置位。f98b861a 的 spoof 未命中（FingerprintHooks 开关未开），或命中了被刻意保留的 DevTools override 路径（probe::ApplyAutomationOverride）。",
+        addFinding(findings, "内核对抗回归", "navigator.webdriver=true",
+          "已观察到该属性值；具体启动配置、override 和反检测开关状态需控制端确认。",
           0, "info");
       } else if (wsp.value === false && hasAnyCdpEvidence()) {
-        addFinding(findings, "内核对抗回归", "webdriver 已伪装但 CDP/AgentRuntime 痕迹仍可检出",
-          "webdriver=false 的同时存在 CDP attach 或 AgentRuntime 信号——单点伪装无法通过组合检测，前端风控按组合信号判定。",
-          0, "warn");
+        addFinding(findings, "内核对抗回归", "webdriver=false，同时观察到探针对象读取",
+          "不推断 webdriver 是否被伪装，也不根据对象读取直接判定 CDP 连接。",
+          0, "info");
       } else if (wsp.value === false && wsp.sampleCount > 4 && !hasAnyCdpEvidence()) {
-        addFinding(findings, "内核对抗回归", "webdriver 伪装稳定且未见 CDP 残留信号",
-          "webdriver 恒为 false，console/debugger/端口/痕迹探针均无命中。", 0, "ok");
+        addFinding(findings, "内核对抗回归", "webdriver=false，本轮未观察到探针读取",
+          "不能排除 CDP，也不能确认内核反检测开关已开启。", 0, "info");
       }
       if (wsp.flipDetected) {
         addFinding(findings, "内核对抗回归", "navigator.webdriver 运行期发生翻转",
@@ -1836,8 +1879,8 @@
       if (wp.consoleGetterHit > 0 || wp.errorStackGetterHit > 0) {
         addFinding(findings, "内核对抗回归", "Worker isolate 内 console 序列化探针被触发",
           "Worker 内 getter 命中 " + (wp.consoleGetterHit + wp.errorStackGetterHit) +
-          " 次。9eef07f0 声称覆盖每个 Worker isolate，此处命中说明抑制在 Worker 上未生效。",
-          10, "warn");
+          " 次；读取来源未知，需结合实际构建与控制端记录验证补丁路径。",
+          0, "info");
       }
       if (wp.consoleGetterHit === 0 && wp.errorStackGetterHit === 0) {
         addFinding(findings, "内核对抗回归", "Worker isolate 未发现 Console 序列化命中",
@@ -1849,14 +1892,14 @@
       }
     } else if (wp && wp.timeout) {
       addFinding(findings, "内核对抗回归", "Worker 探针超时",
-        "Worker 内探针未在 4s 内返回，可能被 debugger 暂停或环境异常。", 4, "info");
+        "Worker 内探针未在 4s 内返回；可能是调度或环境问题，不作为 CDP 证据。", 0, "info");
     }
 
     var bp = report.bindingPersistenceProbe;
     if (bp && bp.enabled) {
-      if (bp.status === "suppressed") {
-        addFinding(findings, "内核对抗回归", "Runtime binding 新 Context 恢复已被抑制",
-          bp.note, 0, "ok");
+      if (bp.status === "not-propagated") {
+        addFinding(findings, "内核对抗回归", "新 Context 未发现同名 binding 属性",
+          bp.note, 0, "info");
       } else if (bp.status === "propagated") {
         addFinding(findings, "内核对抗回归", "Runtime binding 仍传播到新 Context",
           bp.note, 0, "warn");
@@ -1887,12 +1930,14 @@
   /* ================================================================
    * 10. 渲染
    * ================================================================ */
-  var CATEGORY_ORDER = ["AgentRuntime痕迹", "自动化框架", "事件保真度", "行为统计", "CDP/Inspector", "一致性", "环境指纹", "内核对抗回归", "结论"];
+  var CATEGORY_ORDER = ["框架命名特征", "自动化框架", "事件保真度", "行为统计", "CDP/Inspector", "一致性", "环境指纹", "内核对抗回归", "结论"];
 
   function buildSummary(report) {
     return CATEGORY_ORDER.map(function (cat) {
-      var items = report.score.findings.filter(function (f) { return f.category === cat && f.points > 0; });
-      return { label: cat, value: items.length, level: items.length ? (items.some(function (f) { return f.severity === "danger"; }) ? "danger" : "warn") : "ok" };
+      var items = report.score.findings.filter(function (f) {
+        return f.category === cat && (f.points > 0 || cat === 'CDP/Inspector' || cat === '框架命名特征');
+      });
+      return { label: cat, value: items.length, level: items.length ? (items.some(function (f) { return f.severity === "danger"; }) ? "danger" : items.some(function (f) { return f.severity === "warn"; }) ? "warn" : "info") : "ok" };
     }).filter(function (m) { return m.label !== "结论"; });
   }
 
@@ -1956,12 +2001,49 @@
     });
   }
 
+  function getInspectorObservation(report) {
+    var hits = [];
+    var stack = report.cdpStackCheckProbe;
+    var consoleProbe = report.cdpSerializationProbe;
+    if (stack && stack.detected) {
+      hits.push("Stack Check（" + (stack.detectedContexts || []).join(" / ") + "）");
+    }
+    if (consoleProbe && (consoleProbe.consoleGetterHit || consoleProbe.errorStackGetterHit || consoleProbe.toJsonHit)) {
+      hits.push("Console 属性读取");
+    }
+    if (report.workerProbe && (report.workerProbe.consoleGetterHit || report.workerProbe.errorStackGetterHit)) {
+      hits.push("Worker 属性读取");
+    }
+    if (report.cdpObjectInspectionProbe && report.cdpObjectInspectionProbe.hits) {
+      hits.push("Error 对象内省");
+    }
+    if (report.exceptionSerializationProbe && report.exceptionSerializationProbe.exceptionGetterHit) {
+      hits.push("异常对象属性读取");
+    }
+    return {
+      connectionStatus: stack && stack.detected ? "runtime-inspector-observed" : "unknown",
+      observation: hits.length ? "read-observed" : "no-read-observed",
+      hits: hits,
+      note: stack && stack.detected ?
+        "Stack Check 高置信度表明本页面会话内曾有 Runtime/Inspector 消费；历史 latch 不表示当前瞬间仍连接。" :
+        "未观察到不能排除 CDP。"
+    };
+  }
+
   function render(report) {
     var scoreEl = document.getElementById("riskScore");
     var classificationEl = document.getElementById("classification");
     var findingsEl = document.getElementById("findings");
     var rawEl = document.getElementById("rawReport");
     var summaryGrid = document.getElementById("summaryGrid");
+    var inspectorStatus = document.getElementById("inspectorStatus");
+    if (inspectorStatus) {
+      var observation = report.inspectorObservation;
+      inspectorStatus.textContent = observation.connectionStatus === "runtime-inspector-observed" ?
+        "已检测到 Runtime/Inspector：" + observation.hits.join("、") + "。该高置信度信号已计入风险分；可能来自 DevTools 或其他 CDP 客户端。" : observation.hits.length ?
+        "已观察到实验探针读取：" + observation.hits.join("、") + "，尚不足以确认 Runtime/Inspector。" :
+        "尚未观察到探针读取；不能判断 CDP 是否连接。异常探针默认关闭，Binding 与对象内省需控制端配合。";
+    }
 
     scoreEl.textContent = report.score.score;
     classificationEl.textContent = report.score.classification.label;
@@ -1994,6 +2076,13 @@
    * 11. 主流程
    * ================================================================ */
   function runDetection() {
+    if (detectionInFlight) { return detectionInFlight; }
+    detectionInFlight = collectDetection().finally(function () { detectionInFlight = null; });
+    return detectionInFlight;
+  }
+
+  function collectDetection() {
+    var generation = detectionGeneration;
     document.getElementById("statusText").textContent = "正在采集信号...";
     return Promise.all([
       getHighEntropyValues(),
@@ -2003,6 +2092,7 @@
       runWorkerProbe(),
       runCdpStackCheckProbe()
     ]).then(function (values) {
+      if (generation !== detectionGeneration) { return null; }
       var report = {
         generatedAt: new Date().toISOString(),
         location: location.href,
@@ -2039,6 +2129,7 @@
         verdicts: computeVerdicts()
       };
       report.externalStrategyCoverage = getExternalStrategyCoverage(report);
+      report.inspectorObservation = getInspectorObservation(report);
       report.score = scoreReport(report);
       lastReport = report;
       render(report);
@@ -2056,6 +2147,13 @@
   }
 
   function resetBehavior() {
+    detectionGeneration += 1;
+    Object.keys(cdpProbe).forEach(function (key) {
+      var value = cdpProbe[key];
+      cdpProbe[key] = Array.isArray(value) ? [] :
+        typeof value === 'boolean' ? false : typeof value === 'object' ? {} : 0;
+    });
+    window.__automationDetectLab.objectInspectionHits = 0;
     startedAt = performance.now();
     events = [];
     traceLog = [];
@@ -2079,13 +2177,10 @@
     antiFp.exceptionProbeResult = {
       enabled: false,
       exceptionGetterHit: 0,
-      note: "等待自动执行异常序列化探针。"
+      note: "默认不执行；手动诊断会产生未捕获异常，可能在 DevTools 显示红色报错。"
     };
-    runExceptionSerializationProbe().then(function (result) {
-      antiFp.exceptionProbeResult = result;
-      scheduleDetection();
-    });
-    runDetection();
+    if (detectionInFlight) { detectionInFlight.finally(scheduleDetection); }
+    else runDetection();
   }
 
   function exportReport() {
@@ -2122,16 +2217,10 @@
   document.getElementById("resetBehaviorBtn").addEventListener("click", resetBehavior);
 
   setupCdpObjectInspectionProbe();
-  runExceptionSerializationProbe().then(function (result) {
-    antiFp.exceptionProbeResult = result;
-    scheduleDetection();
-  });
   runDetection();
   setInterval(runDetection, 5000);
 
-  // CDP 序列化探针后台高频采样：CDP 客户端按需 enable Runtime domain、只在其请求 console
-  // 对象预览的窗口内才读 getter，故单次打点会"偶现非必现"。用 ~900ms 密集采样提高与该活跃
-  // 窗口的重叠概率；任意一次命中即经 markCdpHit / latch 锁定，不再依赖某一发是否恰好命中。
+  // 保留 900ms 实验采样间隔；该值尚未通过实际构建的检出率和开销校准。
   setInterval(function () {
     var before = cdpProbe.serializationHitSamples;
     runCdpSerializationProbe();
