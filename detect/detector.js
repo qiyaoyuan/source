@@ -108,7 +108,23 @@
     lastRunAt: 0,
     debuggerSamples: [],
     stackCheckRuns: 0
+    stackCheckRuns: 0,
+    // ---- 会话内 latch / 采样统计（解决 CDP 间歇消费导致的"偶现非必现"）----
+    serializationSamples: 0,      // 序列化探针累计采样次数
+    serializationHitSamples: 0,   // 其中命中（getter/stack/toJSON 增量>0）的采样次数
+    stackCheckSamples: 0,         // stack check 累计采样次数
+    stackCheckHitSamples: 0,      // 其中命中的采样次数
+    stackCheckDetectedEver: false,// stack check 会话内是否曾命中（latch）
+    stackCheckContextsEver: {},   // 曾命中的上下文集合（main/iframe/worker）
+    firstHitAt: 0,                // 会话内首次命中时刻（ms）
+    lastHitAt: 0                  // 会话内最近命中时刻（ms）
   };
+
+  function markCdpHit() {
+    var now = Math.round(performance.now() - startedAt);
+    if (!cdpProbe.firstHitAt) { cdpProbe.firstHitAt = now; }
+    cdpProbe.lastHitAt = now;
+  }
 
   /** 内核对抗回归验证状态（commit f98b861a / 9eef07f0） */
   var antiFp = {
@@ -134,6 +150,13 @@
    *    - data-__cdp-locate  : CDP 定位瞬态属性
    *    - data-x5-overlay    : 蒙层节点
    *    - #playwright-highlight-container / #x5-overlay-* : 节点创建
+   * 2. 已知框架注入痕迹监视（MutationObserver）
+   *    注意：以下均为"已知 X5Use / Playwright 源码后"针对性匹配的白盒指纹，
+   *    只能提示"疑似使用了该特定框架"，不能泛化证明自动化，且改名即失效。
+   *    - data-hi="N"        : getState 高亮元素索引注入（通用短属性，弱信号，易误报）
+   *    - data-__cdp-locate  : CDP 定位瞬态属性（弱信号）
+   *    - data-x5-overlay    : 蒙层节点（专有命名，较强）
+   *    - #playwright-highlight-container / #x5-overlay-* : 专有命名节点（较强）
    * ================================================================ */
   var TRACE_ATTRS = ["data-hi", "data-__cdp-locate", "data-x5-overlay"];
   var TRACE_NODE_RE = /playwright-highlight-container|x5-overlay/i;
@@ -868,6 +891,9 @@
     return safe("cdpSerializationProbe", function () {
       cdpProbe.lastRunAt = Math.round(performance.now());
 
+      // 记录采样前基线，用于判断"本次采样"是否命中（区别于会话累计）
+      var beforeHit = cdpProbe.consoleGetterHit + cdpProbe.errorStackGetterHit + cdpProbe.toJsonHit;
+
       var probeObject = {};
       Object.defineProperty(probeObject, "cdpGetterProbe", {
         get: function () {
@@ -891,12 +917,29 @@
       });
 
       console.debug("automation-detection-cdp-probe", probeObject, error);
+
+      // getter 序列化通常在 console 调用栈内同步触发（若 CDP 消费者活跃）。
+      cdpProbe.serializationSamples += 1;
+      var afterHit = cdpProbe.consoleGetterHit + cdpProbe.errorStackGetterHit + cdpProbe.toJsonHit;
+      var hitThisSample = afterHit > beforeHit;
+      if (hitThisSample) {
+        cdpProbe.serializationHitSamples += 1;
+        markCdpHit();
+      }
+
       return {
         consoleGetterHit: cdpProbe.consoleGetterHit,
         errorStackGetterHit: cdpProbe.errorStackGetterHit,
         toJsonHit: cdpProbe.toJsonHit,
         lastRunAt: cdpProbe.lastRunAt,
         note: "Getter/toJSON hits happen when a CDP Runtime client requests console object previews."
+        samples: cdpProbe.serializationSamples,
+        hitSamples: cdpProbe.serializationHitSamples,
+        hitThisSample: hitThisSample,
+        detectedEver: (cdpProbe.consoleGetterHit + cdpProbe.errorStackGetterHit + cdpProbe.toJsonHit) > 0,
+        firstHitAt: cdpProbe.firstHitAt,
+        lastHitAt: cdpProbe.lastHitAt,
+        note: "间歇性命中属正常：CDP 客户端按需 enable Runtime domain，getter 仅在其请求 console 对象预览的窗口内被触发。会话内命中过一次即确诊存在消费者。"
       };
     }, {
       consoleGetterHit: cdpProbe.consoleGetterHit,
@@ -1052,14 +1095,35 @@
       runIframeStackMaterializationProbe(),
       runWorkerStackMaterializationProbe()
     ]).then(function (contexts) {
+      var detectedNow = contexts.some(function (item) { return item.detected; });
+      cdpProbe.stackCheckSamples += 1;
+      if (detectedNow) {
+        cdpProbe.stackCheckHitSamples += 1;
+        cdpProbe.stackCheckDetectedEver = true;
+        markCdpHit();
+        contexts.forEach(function (item) {
+          if (item.detected) { cdpProbe.stackCheckContextsEver[item.context] = true; }
+        });
+      }
       return {
         runs: cdpProbe.stackCheckRuns,
+        // detected 采用会话内 latch：偶现一次即锁定，避免"操作过程偶现非必现"漏判
+        detected: cdpProbe.stackCheckDetectedEver,
+        detectedNow: detectedNow,
+        detectedEver: cdpProbe.stackCheckDetectedEver,
+        samples: cdpProbe.stackCheckSamples,
+        hitSamples: cdpProbe.stackCheckHitSamples,
         detected: contexts.some(function (item) { return item.detected; }),
         detectedContexts: contexts.filter(function (item) { return item.detected; }).map(function (item) { return item.context; }),
+        detectedContexts: Object.keys(cdpProbe.stackCheckContextsEver),
+        detectedContextsNow: contexts.filter(function (item) { return item.detected; }).map(function (item) { return item.context; }),
+        firstHitAt: cdpProbe.firstHitAt,
+        lastHitAt: cdpProbe.lastHitAt,
         contexts: contexts,
         mappedFrom: ["Fingerprint Scan", "DeviceAndBrowserInfo", "bot-signal", "Brotector"],
         mechanism: "Error.prepareStackTrace + console.log(Error) stack materialization side channel",
         note: "DevTools opened by a human can trigger the same signal as automation because DevTools is also an Inspector/CDP consumer."
+        note: "间歇命中属正常（CDP 按需消费）。会话内命中过一次即 latch 为 detected。DevTools 打开也会触发同一信号。"
       };
     });
   }
@@ -1094,6 +1158,7 @@
         var before = performance.now();
         // 测量已附加的 inspector 是否会在 debugger 语句上暂停
         debugger;
+        // 原 debugger 断点已移除，避免打开 DevTools 时反复中断
         samples.push(Number((performance.now() - before).toFixed(3)));
       }
       cdpProbe.debuggerSamples = samples;
@@ -1514,6 +1579,15 @@
     var verdicts = report.verdicts;
 
     /* ---- A. AgentRuntime 专属痕迹（石锤级） ---- */
+    /* ---- A. 已知框架注入痕迹（白盒特征匹配，非通用自动化证据） ----
+     * data-hi / data-__cdp-locate / x5-overlay / playwright-highlight-container 都是
+     * "在已知 X5Use / Playwright 源码之后"针对性盯的框架指纹：只能提示"疑似使用了该特定
+     * 框架"，无法泛化证明自动化，且对方改一个属性名 / 容器 id 即可绕过。因此这里按
+     * "专有命名节点(较强)"与"通用短属性(弱, 易误报)"分档降级，不再作为石锤级 danger。 */
+    var strongTraces = report.traces.filter(function (t) {
+      return /x5-overlay|playwright-highlight|marker-node|node-added|node-removed/i.test(t.kind || "") ||
+        /overlay|highlight-container/i.test(t.detail || "");
+    });
     if (report.traces.length) {
       var kinds = {};
       report.traces.forEach(function (t) { kinds[t.kind.split(":")[0]] = (kinds[t.kind.split(":")[0]] || 0) + 1; });
@@ -1522,6 +1596,21 @@
         "捕获 AgentRuntime 注入痕迹 " + report.traces.length + " 条",
         "命中特征: " + kindText + "。data-hi / playwright-highlight-container / x5-overlay 均为该 Agent 独有标记。",
         45, "danger");
+      if (strongTraces.length) {
+        addFinding(findings, "AgentRuntime痕迹",
+          "检出专有命名注入节点（疑似 X5Use / 自动化高亮框架）",
+          "命中: " + kindText + "。playwright-highlight-container / x5-overlay 这类专有命名节点，普通网站极少自发使用，" +
+          "可提示页面上运行着该 overlay / 高亮框架。但这属于基于已知源码的白盒特征匹配：改名即失效，" +
+          "且只证明框架身份、不等于自动化本身，需结合事件保真度（isTrusted）/ CDP 信号综合判断。",
+          20, "warn");
+      } else {
+        addFinding(findings, "AgentRuntime痕迹",
+          "检出已知框架属性标记（弱信号，可能误报）",
+          "命中: " + kindText + "。data-hi / data-__cdp-locate 是通过已知 X5Use 源码盯的通用短属性，" +
+          "普通网站或前端库也可能使用同名属性（如 hidden / highlight / index 缩写），单独出现不能表明自动化；" +
+          "仅作为需要其它信号佐证的弱线索，不单独计入自动化判定。",
+          5, "info");
+      }
     }
 
     /* ---- B. 自动化框架直接信号 ---- */
@@ -1589,15 +1678,29 @@
 
     /* ---- E. CDP / Inspector ---- */
     var cdp = report.cdpSerializationProbe;
+    // 命中采用会话累计（latch）：CDP 按需消费导致单发偶现，故只要会话内命中过就算数。
     if (cdp.consoleGetterHit || cdp.errorStackGetterHit || cdp.toJsonHit) {
+      var serRate = (cdp.samples ? (cdp.hitSamples || 0) + "/" + cdp.samples : "n/a");
+      var serWindow = (cdp.firstHitAt ? "，首次@" + cdp.firstHitAt + "ms / 最近@" + cdp.lastHitAt + "ms" : "");
       addFinding(findings, "CDP/Inspector", "console 序列化探针被触发",
+      addFinding(findings, "CDP/Inspector", "console 序列化探针被触发（会话内命中）",
         "getter×" + cdp.consoleGetterHit + " stackGetter×" + cdp.errorStackGetterHit + " toJSON×" + cdp.toJsonHit +
         "。说明存在读取 console 对象预览的调试器/CDP 客户端。", 8, "warn");
+        "，采样命中 " + serRate + serWindow +
+        "。存在读取 console 对象预览的调试器/CDP 客户端。命中间歇（非必现）属正常——CDP 按需 enable " +
+        "Runtime domain，只在其请求对象预览的窗口内触发 getter；会话内命中一次即确诊。", 12, "warn");
     }
     if (report.cdpStackCheckProbe && report.cdpStackCheckProbe.detected) {
       addFinding(findings, "CDP/Inspector", "CDP Stack Check 命中",
         "Error.prepareStackTrace 在 " + report.cdpStackCheckProbe.detectedContexts.join(", ") +
         " 上下文被触发，说明 console Error 栈被 Inspector/CDP 消费者物化。", 28, "danger");
+      var sc = report.cdpStackCheckProbe;
+      var scRate = (sc.samples ? (sc.hitSamples || 0) + "/" + sc.samples : "n/a");
+      var scNow = sc.detectedNow ? "本次仍命中" : "本次未命中（历史已 latch）";
+      addFinding(findings, "CDP/Inspector", "CDP Stack Check 命中（会话内 latch）",
+        "Error.prepareStackTrace 在 " + (sc.detectedContexts.join(", ") || "—") +
+        " 上下文被触发，console Error 栈被 Inspector/CDP 消费者物化。采样命中 " + scRate +
+        "，" + scNow + "。偶现即确诊：CDP 消费是间歇的，会话内命中过一次即锁定。", 28, "danger");
     }
     if (report.cdpObjectInspectionProbe && report.cdpObjectInspectionProbe.hits > 0) {
       addFinding(findings, "CDP/Inspector", "Error 对象内省探针命中",
@@ -1734,6 +1837,7 @@
         (report.exceptionSerializationProbe && report.exceptionSerializationProbe.enabled &&
           report.exceptionSerializationProbe.exceptionGetterHit > 0) ||
         report.traces.length > 0;
+        strongTraces.length > 0;
     }
 
     var wsp = report.webdriverSpoofProbe;
@@ -2039,4 +2143,13 @@
   setupCdpObjectInspectionProbe();
   runDetection();
   setInterval(runDetection, 5000);
+
+  // CDP 序列化探针后台高频采样：CDP 客户端按需 enable Runtime domain、只在其请求 console
+  // 对象预览的窗口内才读 getter，故单次打点会"偶现非必现"。用 ~900ms 密集采样提高与该活跃
+  // 窗口的重叠概率；任意一次命中即经 markCdpHit / latch 锁定，不再依赖某一发是否恰好命中。
+  setInterval(function () {
+    var before = cdpProbe.serializationHitSamples;
+    runCdpSerializationProbe();
+    if (cdpProbe.serializationHitSamples > before) { scheduleDetection(); }
+  }, 900);
 }());
