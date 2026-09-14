@@ -1139,22 +1139,35 @@
         'var err = new Error("worker-stack-probe");',
         'Object.defineProperty(err, "stack", { get: function () { hits.stackGetter += 1; return "s"; } });',
         'console.debug("worker-cdp-probe", obj, err);',
+        // 异常序列化旁路探针（Worker 版）：commit 3e0d8f90 只 guard 了 messageAdded(console)，
+        // 未 guard V8InspectorImpl::exceptionThrown。用非标准属性名挂 getter，避免被标准 error handler 读到。
+        'var excHits = 0;',
+        'try {',
+        '  self.addEventListener("unhandledrejection", function (e) { if (e && e.preventDefault) e.preventDefault(); });',
+        '  var eo = {};',
+        '  Object.defineProperty(eo, "__cdp_exc_trap__", { enumerable: true, get: function () { excHits += 1; return 1; } });',
+        '  Promise.reject(eo);',
+        '} catch (e) {}',
         'var samples = [];',
         'for (var i = 0; i < 3; i += 1) {',
         '  var t0 = performance.now();',
         '  debugger;',
         '  samples.push(Number((performance.now() - t0).toFixed(3)));',
         '}',
-        'postMessage({',
-        '  supported: true,',
-        '  consoleGetterHit: hits.getter,',
-        '  errorStackGetterHit: hits.stackGetter,',
-        '  debuggerMaxMs: Math.max.apply(Math, samples),',
-        '  webdriver: ("webdriver" in navigator) ? navigator.webdriver : "property-absent",',
-        '  userAgent: navigator.userAgent,',
-        '  hardwareConcurrency: navigator.hardwareConcurrency,',
-        '  languages: navigator.languages ? Array.prototype.slice.call(navigator.languages) : []',
-        '});'
+        // 延迟 200ms 再回传，给 unhandledrejection 的 exceptionThrown 序列化留出触发时间
+        'setTimeout(function () {',
+        '  postMessage({',
+        '    supported: true,',
+        '    consoleGetterHit: hits.getter,',
+        '    errorStackGetterHit: hits.stackGetter,',
+        '    exceptionGetterHit: excHits,',
+        '    debuggerMaxMs: Math.max.apply(Math, samples),',
+        '    webdriver: ("webdriver" in navigator) ? navigator.webdriver : "property-absent",',
+        '    userAgent: navigator.userAgent,',
+        '    hardwareConcurrency: navigator.hardwareConcurrency,',
+        '    languages: navigator.languages ? Array.prototype.slice.call(navigator.languages) : []',
+        '  });',
+        '}, 200);'
       ].join("\n");
       var worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
       return new Promise(function (resolve) {
@@ -1176,16 +1189,57 @@
     }, Promise.resolve({ supported: false }));
   }
 
-  // 异常序列化探针容易被 Chrome 自身错误展示、DevTools 或页面错误处理链触发，
-  // 默认只保留说明，不主动 throw/reject，也不参与风险评分。
+  // 异常序列化旁路探针（exceptionThrown 路径）。
+  // 原理：commit 3e0d8f90 只在 V8RuntimeAgentImpl::messageAdded(console 路径) 加了 guard，
+  //       未 guard V8InspectorImpl::exceptionThrown。未捕获异常/unhandled rejection 的
+  //       exceptionDetails 仍会被 CDP 客户端序列化预览，从而触发对象 getter。
+  // 误报控制：
+  //   1) 用非标准属性名 __cdp_exc_trap__ 挂 getter —— 页面/Chrome 的标准 error handler 只读
+  //      message/stack 等字段，不会枚举该属性；只有 inspector 生成 RemoteObject preview 时才读。
+  //   2) 自己注册的 handler 里 preventDefault 抑制控制台噪音，且绝不访问对象属性，避免自触发。
+  // 基线：无 CDP -> hit=0；真人开 DevTools 或普通 CDP attach -> hit>0；
+  //       x5use 伪装(console 掐、exception 未掐) -> hit>0（这正是不对称签名的来源）。
   function runExceptionSerializationProbe() {
-    return {
-      enabled: false,
-      exceptionGetterHit: antiFp.exceptionGetterHit,
-      exceptionToStringHit: antiFp.exceptionToStringHit,
-      lastRunAt: antiFp.exceptionProbeAt,
-      note: "Disabled by default because uncaught exception / unhandled rejection probes can false-positive in ordinary Chrome. Use CDP Stack Check and console serialization probes for default scoring."
-    };
+    return new Promise(function (resolve) {
+      var hit = 0;
+      var sources = [];
+      function makeProbe(tag) {
+        var o = {};
+        Object.defineProperty(o, "__cdp_exc_trap__", {
+          enumerable: true,
+          get: function () {
+            hit += 1;
+            try {
+              sources.push((new Error("read-" + tag)).stack.split("\n").slice(1, 3).join(" | "));
+            } catch (e) { /* ignore */ }
+            return 1;
+          }
+        });
+        return o;
+      }
+      function onRej(e) { try { e.preventDefault(); } catch (x) { /* ignore */ } }
+      function onErr(e) { try { e.preventDefault(); } catch (x) { /* ignore */ } return true; }
+      window.addEventListener("unhandledrejection", onRej);
+      window.addEventListener("error", onErr, true);
+
+      // 路径1：真·未捕获异常（脱离当前调用栈）
+      setTimeout(function () { throw makeProbe("throw"); }, 0);
+      // 路径2：unhandled promise rejection
+      try { Promise.reject(makeProbe("reject")); } catch (e) { /* ignore */ }
+
+      setTimeout(function () {
+        window.removeEventListener("unhandledrejection", onRej);
+        window.removeEventListener("error", onErr, true);
+        antiFp.exceptionGetterHit = hit;
+        antiFp.exceptionProbeAt = Math.round(performance.now() - startedAt);
+        resolve({
+          enabled: true,
+          exceptionGetterHit: hit,
+          sources: sources.slice(0, 4),
+          note: "hit>0：未捕获异常的 exceptionDetails 被 inspector/CDP 序列化预览（exceptionThrown 路径，未被 commit 9eef07f0/3e0d8f90 抑制）。console 静默但此处命中 => Runtime inspector 伪装的不对称签名。"
+        });
+      }, 250);
+    });
   }
 
   // webdriver 伪装回归：值 + 描述符 + 跨 realm 一致性 + 运行期翻转
@@ -1562,6 +1616,32 @@
         "可达端口: " + report.debugPortProbe.reachablePorts.join(", ") + "，可能开启了 remote debugging。", 18, "warn");
     }
 
+    /* ---- E2. 异常序列化旁路 + console/exception 不对称（针对内核 Runtime inspector 伪装） ---- */
+    // console 路径是否命中（会被 commit 3e0d8f90 的 messageAdded return 掐掉）
+    var consolePathHit = cdp.consoleGetterHit > 0 || cdp.errorStackGetterHit > 0 ||
+      cdp.toJsonHit > 0 ||
+      (report.cdpStackCheckProbe && report.cdpStackCheckProbe.detected);
+    // 异常路径是否命中（commit 未覆盖 exceptionThrown，可穿透伪装）
+    var excPathHit = report.exceptionSerializationProbe &&
+      report.exceptionSerializationProbe.enabled &&
+      report.exceptionSerializationProbe.exceptionGetterHit > 0;
+
+    if (!consolePathHit && excPathHit) {
+      // 不对称：console 静默但 exception 泄漏 —— 内核 Runtime inspector 伪装的独有签名
+      addFinding(findings, "CDP/Inspector",
+        "console 路径静默但 exception 路径泄漏（inspector 抑制不对称）",
+        "consoleAPICalled/StackCheck 探针无命中，但未捕获异常的 exceptionDetails 仍触发序列化预览" +
+        "（exceptionGetterHit=" + report.exceptionSerializationProbe.exceptionGetterHit + "）。" +
+        "这正是 messageAdded 被抑制、exceptionThrown 未被抑制的特征，是内核 Runtime inspector " +
+        "伪装（commit 9eef07f0 / 3e0d8f90）的独有签名。", 35, "danger");
+    } else if (consolePathHit && excPathHit) {
+      addFinding(findings, "CDP/Inspector", "console 与 exception 路径均触发序列化",
+        "存在未做针对性抑制的 inspector/CDP 消费者（普通 CDP attach 或真人开 DevTools）。", 20, "warn");
+    } else if (excPathHit) {
+      addFinding(findings, "CDP/Inspector", "异常序列化探针命中",
+        "未捕获异常的 exceptionDetails 被 inspector/CDP 序列化预览，存在 Runtime inspector 消费者。", 18, "warn");
+    }
+
     /* ---- F. 运行时一致性 ---- */
     if (/Chrome/i.test(nav.userAgent) && !env.chromeObject.present) {
       addFinding(findings, "一致性", "Chrome UA 但缺少 window.chrome", "UA 与 Chrome 专属对象不一致。", 8, "warn");
@@ -1651,6 +1731,8 @@
         (report.cdpObjectInspectionProbe && report.cdpObjectInspectionProbe.hits > 0) ||
         (report.debuggerTimingProbe && report.debuggerTimingProbe.maxMs > 120) ||
         (report.debugPortProbe && report.debugPortProbe.reachablePorts.length > 0) ||
+        (report.exceptionSerializationProbe && report.exceptionSerializationProbe.enabled &&
+          report.exceptionSerializationProbe.exceptionGetterHit > 0) ||
         report.traces.length > 0;
     }
 
@@ -1689,6 +1771,12 @@
       if (wp.debuggerMaxMs > 120) {
         addFinding(findings, "内核对抗回归", "Worker 内 debugger 语句出现明显暂停",
           "Worker debugger 最大耗时 " + wp.debuggerMaxMs + "ms，存在已启用 Debugger 的控制端。", 10, "warn");
+      }
+      if (wp.exceptionGetterHit > 0) {
+        addFinding(findings, "内核对抗回归", "Worker isolate 内异常序列化探针被触发",
+          "Worker 内未捕获异常的 exceptionDetails 触发 getter " + wp.exceptionGetterHit +
+          " 次。commit 只 guard 了 messageAdded(console)，exceptionThrown 路径在 Worker 上同样未被抑制。",
+          10, "warn");
       }
       if (wp.consoleGetterHit === 0 && wp.errorStackGetterHit === 0 && wp.debuggerMaxMs <= 120) {
         addFinding(findings, "内核对抗回归", "Worker isolate 探针无命中",
@@ -1839,7 +1927,8 @@
       getPermissionsConsistency(),
       getMediaDevicesCount(),
       runWorkerProbe(),
-      runCdpStackCheckProbe()
+      runCdpStackCheckProbe(),
+      runExceptionSerializationProbe()
     ]).then(function (values) {
       var report = {
         generatedAt: new Date().toISOString(),
@@ -1865,7 +1954,7 @@
         iframeConsistency: getIframeConsistency(),
         nativeIntegrity: getNativeIntegrity(),
         webdriverSpoofProbe: getWebdriverSpoofProbe(),
-        exceptionSerializationProbe: runExceptionSerializationProbe(),
+        exceptionSerializationProbe: values[7],
         workerProbe: values[5],
         graphics: {
           canvasHash: getCanvasHash(),
